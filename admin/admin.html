@@ -226,8 +226,63 @@
     </div>
 
     <script>
-        const SERVER_URL = 'http://192.168.2.10:3001';
+        var server_ip;
+            (function detectServerIP() {
+                try {
+                    let osModule = null;
+                    if (typeof require === 'function') {
+                        try { osModule = require('os'); } catch (e) { osModule = null; }
+                    }
 
+                    if (osModule && osModule.networkInterfaces) {
+                        const interfaces = osModule.networkInterfaces();
+                        let prefer = ['Wi-Fi', 'WLAN', 'Ethernet', '本地连接'];
+                        let found = false;
+                        for (const name of Object.keys(interfaces)) {
+                            for (const interfaceInfo of interfaces[name]) {
+                                if (interfaceInfo && interfaceInfo.family === 'IPv4' && !interfaceInfo.internal) {
+                                    if (prefer.some(p => name.includes(p))) {
+                                        server_ip = String(interfaceInfo.address);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (found) break;
+                        }
+                        if (!found) {
+                            for (const name of Object.keys(interfaces)) {
+                                for (const interfaceInfo of interfaces[name]) {
+                                    if (interfaceInfo && interfaceInfo.family === 'IPv4' && !interfaceInfo.internal) {
+                                        server_ip = String(interfaceInfo.address);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (found) break;
+                            }
+                        }
+                    }
+                } catch (error) {
+                    console.warn('检测本地网卡失败:', error);
+                }
+                if (!server_ip) {
+                    try {
+                        if (typeof window !== 'undefined' && window.location && window.location.hostname) {
+                            server_ip = String(window.location.hostname);
+                        }
+                    } catch (e) {
+                        server_ip = undefined;
+                    }
+                }
+                if (!server_ip) {
+                    server_ip = '127.0.0.1';
+                }
+            })();
+
+            const SERVER_URL = `http://${String(server_ip)}:3001`;
+            
+            //alert(SERVER_URL);
         // 加载服务器状态
         async function loadServerStatus() {
             try {
@@ -246,7 +301,7 @@
                     '<p><span class="status-indicator status-offline"></span>❌ 无法连接服务器</p>';
             }
         }
-
+        
         // 创建房间
         async function createRoom() {
             const roomId = document.getElementById('new-room-id').value.trim();

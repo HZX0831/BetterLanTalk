@@ -824,7 +824,7 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
-    console.log('🚀 内网聊天室服务器已启动 v1.2.0');
+    console.log('🚀 内网聊天室服务器已启动 v1.2.1');
     console.log(`📍 本地访问: http://localhost:${PORT}`);
     console.log(`🌐 内网访问: http://${localIP}:${PORT}`);
     console.log(`💬 聊天室: http://${localIP}:${PORT}/client/index.html`);
