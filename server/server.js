@@ -10,6 +10,7 @@ const { exec } = require('child_process');
 
 // 预览与消息共用新版 Luogu Markdown 解析器。
 const processMarkdown = require('./markdown');
+const jiyu = require('./jiyu');
 
 // 简单的ID生成器
 function generateId() {
@@ -74,11 +75,16 @@ if (!config.maxUploadsMB || isNaN(config.maxUploadsMB)) config.maxUploadsMB = 20
 config.maxFileMB = Number(config.maxFileMB);
 config.maxUploadsMB = Number(config.maxUploadsMB);
 if (typeof config.serverIP !== 'string') config.serverIP = '';   // 手动指定的对外IP，留空则自动检测
+if (!config.jiyuPort || isNaN(config.jiyuPort)) config.jiyuPort = 4705; // 极域学生端监听端口，默认4705
+config.jiyuPort = Number(config.jiyuPort);
+if (typeof config.jiyuEnabled !== 'boolean') config.jiyuEnabled = true; // 极域弹窗提醒总开关
 saveJSON(CONFIG_FILE, {
     port: config.port,
     maxFileMB: config.maxFileMB,
     maxUploadsMB: config.maxUploadsMB,
-    serverIP: config.serverIP
+    serverIP: config.serverIP,
+    jiyuPort: config.jiyuPort,
+    jiyuEnabled: config.jiyuEnabled
 });
 
 // 确保上传目录存在
@@ -616,7 +622,9 @@ app.get('/api/config', adminMiddleware, (req, res) => {
         maxUploadsMB: config.maxUploadsMB,
         serverIP: config.serverIP || '',
         detectedIP: getLocalIP(),
-        localIP
+        localIP,
+        jiyuPort: config.jiyuPort || 4705,
+        jiyuEnabled: config.jiyuEnabled !== false
     });
 });
 
@@ -646,7 +654,7 @@ app.get('/api/files', authMiddleware, (req, res) => {
 });
 
 app.put('/api/config', adminMiddleware, (req, res) => {
-    const { port, maxFileMB, maxUploadsMB, serverIP } = req.body;
+    const { port, maxFileMB, maxUploadsMB, serverIP, jiyuPort, jiyuEnabled } = req.body;
     const updated = [];
 
     if (port !== undefined) {
@@ -689,12 +697,26 @@ app.put('/api/config', adminMiddleware, (req, res) => {
     if (config.maxFileMB > config.maxUploadsMB) {
         return res.status(400).json({ error: '单文件上限不能大于上传目录总上限' });
     }
+    if (jiyuPort !== undefined) {
+        const jp = Number(jiyuPort);
+        if (!jp || isNaN(jp) || jp < 1 || jp > 65535) {
+            return res.status(400).json({ error: '极域端口号应为1-65535之间的数字' });
+        }
+        config.jiyuPort = jp;
+        updated.push(`极域端口 ${jp}`);
+    }
+    if (jiyuEnabled !== undefined) {
+        config.jiyuEnabled = !!jiyuEnabled;
+        updated.push(`极域弹窗提醒 ${config.jiyuEnabled ? '已启用' : '已停用'}`);
+    }
 
     saveJSON(CONFIG_FILE, {
         port: config.port,
         maxFileMB: config.maxFileMB,
         maxUploadsMB: config.maxUploadsMB,
-        serverIP: config.serverIP
+        serverIP: config.serverIP,
+        jiyuPort: config.jiyuPort,
+        jiyuEnabled: config.jiyuEnabled
     });
     // 修改上限后立即按新上限清理一次
     cleanupUploads();
@@ -705,9 +727,81 @@ app.put('/api/config', adminMiddleware, (req, res) => {
         maxFileMB: config.maxFileMB,
         maxUploadsMB: config.maxUploadsMB,
         serverIP: config.serverIP,
-        localIP
+        localIP,
+        jiyuPort: config.jiyuPort,
+        jiyuEnabled: config.jiyuEnabled
     });
 });
+
+// 极域弹窗连通性测试 API
+app.post('/api/jiyu/test', adminMiddleware, (req, res) => {
+    const { ip } = req.body || {};
+    const targetIp = String(ip || '').trim();
+    if (!targetIp || !/^(\d{1,3}\.){3}\d{1,3}$/.test(targetIp)) {
+        return res.status(400).json({ error: '请输入有效的测试目标 IP 地址' });
+    }
+    const port = config.jiyuPort || 4705;
+    const testMsg = `[极域测试 | 管理员: ${req.auth.username}]: 这是一条来自 BetterLanTalk 的极域弹窗连通性测试消息！`;
+    jiyu.sendJiyuPopup([targetIp], port, testMsg, (err, result) => {
+        if (err) return res.status(500).json({ error: '发送失败: ' + err.message });
+        res.json({ success: true, message: `已向 ${targetIp}:${port} 发送测试弹窗`, result });
+    });
+});
+
+/**
+ * 智能向房间内需要接收极域弹窗的目标（离线或未聚焦/不在当前房间）发送极域弹窗
+ * @param {string} roomId 房间ID
+ * @param {string} senderUsername 发信人账号名
+ * @param {string} content 消息正文
+ * @param {boolean} isFile 是否为文件
+ * @param {string} fileName 文件名
+ */
+function notifyJiyuRoom(roomId, senderUsername, content, isFile = false, fileName = '') {
+    if (config.jiyuEnabled === false) return;
+
+    const room = rooms.get(roomId);
+    if (!room) return;
+
+    // 1. 确定该房间所有应通知的账号名单
+    let eligibleUsernames = [];
+    if (room.isPublic) {
+        eligibleUsernames = userStore.users.map(u => u.username);
+    } else {
+        eligibleUsernames = Array.from(new Set([room.createdBy, ...(room.members || [])])).filter(Boolean);
+    }
+
+    // 排除发信人自己
+    eligibleUsernames = eligibleUsernames.filter(name => name !== senderUsername);
+    if (!eligibleUsernames.length) return;
+
+    // 2. 检查哪些用户当前正在在线并且积极查看该房间 (isViewing === true && currentRoom === roomId)
+    const activeViewers = new Set();
+    for (const onlineUser of users.values()) {
+        if (onlineUser.isViewing && onlineUser.currentRoom === roomId) {
+            activeViewers.add(onlineUser.username);
+        }
+    }
+
+    // 3. 需要接收极域弹窗的账号 = 有资格的账号中未在积极查看该房间的
+    const needPopupUsernames = eligibleUsernames.filter(name => !activeViewers.has(name));
+    if (!needPopupUsernames.length) return;
+
+    // 4. 获取这些账号在注册时绑定的 IP
+    const targetIps = [];
+    for (const name of needPopupUsernames) {
+        const acc = userStore.users.find(u => u.username === name);
+        if (acc && acc.registeredIp) {
+            targetIps.push(acc.registeredIp);
+        }
+    }
+
+    if (!targetIps.length) return;
+
+    // 5. 格式化并发送极域弹窗
+    const jiyuText = jiyu.formatJiyuMessage(room.name, senderUsername, content, isFile, fileName);
+    console.log(`📡 [极域推送] 房间: ${room.name}, 发件人: ${senderUsername}, 目标IP数: ${targetIps.length}, 端口: ${config.jiyuPort}`);
+    jiyu.sendJiyuPopup(targetIps, config.jiyuPort, jiyuText);
+}
 
 // ============ 文件上传 API ============
 app.post('/api/upload', authMiddleware, (req, res) => {
@@ -835,6 +929,23 @@ app.post('/api/broadcast', adminMiddleware, (req, res) => {
     });
 
     io.emit('message', adminMessage);
+
+    // 极域弹窗广播推送
+    if (config.jiyuEnabled !== false) {
+        const activeViewers = new Set();
+        for (const onlineUser of users.values()) {
+            if (onlineUser.isViewing) activeViewers.add(onlineUser.username);
+        }
+        const targetIps = userStore.users
+            .filter(u => u.username !== req.auth.username && !activeViewers.has(u.username))
+            .map(u => u.registeredIp)
+            .filter(Boolean);
+        if (targetIps.length) {
+            const jiyuText = `[系统广播 | 来自: ${req.auth.username}]: ${message}`;
+            jiyu.sendJiyuPopup(targetIps, config.jiyuPort, jiyuText);
+        }
+    }
+
     res.json({ success: true, message: '广播发送成功' });
 });
 app.post('/api/rooms', adminMiddleware, (req, res) => {
@@ -948,12 +1059,25 @@ io.on('connection', (socket) => {
         }, Math.max(0, userStore.tokens[token].expiresAt - Date.now()));
         const user = { id: generateId(), username: auth.username, role: auth.role,
             socketId: socket.id, joinTime: Date.now(), ip: clientIP.replace('::ffff:', ''),
-            isMuted: mutedIPs.has(clientIP.replace('::ffff:', '')), currentRoom: roomId };
+            isMuted: mutedIPs.has(clientIP.replace('::ffff:', '')), currentRoom: roomId,
+            isViewing: true };
         users.set(socket.id, user);
         syncRoomSubscriptions();
         socket.emit('account_changed', auth);
         switchRoom(socket, user, room);
         if (!cancelPendingLeave(user.username)) broadcastUserJoined(socket, roomId, user.username, 'join');
+    });
+
+    // 客户端页面焦点与可见状态上报（用于智能免打扰判断）
+    socket.on('client_state', (data = {}) => {
+        const user = users.get(socket.id);
+        if (!user) return;
+        if (typeof data.isViewing === 'boolean') {
+            user.isViewing = data.isViewing;
+        }
+        if (typeof data.currentRoom === 'string') {
+            user.currentRoom = data.currentRoom;
+        }
     });
 
     socket.on('send_message', (data) => {
@@ -994,6 +1118,9 @@ io.on('connection', (socket) => {
         roomMessages.push(message);
         io.to(roomChannel(roomId)).emit('message', message);
         
+        // 极域弹窗智能推送（仅向离线或未聚焦查看该房间的用户发送）
+        notifyJiyuRoom(roomId, user.username, content, false);
+
         console.log(`消息 [${roomId}]: ${user.username} (IP: ${user.ip}): ${content}`);
     });
 
@@ -1046,6 +1173,9 @@ io.on('connection', (socket) => {
         roomMessages.push(message);
         io.to(roomChannel(roomId)).emit('message', message);
         saveFiles();
+
+        // 极域弹窗智能推送
+        notifyJiyuRoom(roomId, user.username, '', true, record.name);
 
         console.log(`文件消息 [${roomId}]: ${record.name} by ${user.username}`);
     });
@@ -1115,6 +1245,7 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 内网访问: http://${localIP}:${PORT}`);
     console.log(`💬 聊天室: http://${localIP}:${PORT}/`);
     console.log(`📎 文件传输: 单文件上限 ${config.maxFileMB}MB / 目录总量 ${config.maxUploadsMB}MB（管理面板可调）`);
+    console.log(`📡 极域弹窗: 目标端口 ${config.jiyuPort} (${config.jiyuEnabled ? '已启用' : '已停用'})`);
     console.log('================================');
     console.log('按 Ctrl+C 停止服务器');
 

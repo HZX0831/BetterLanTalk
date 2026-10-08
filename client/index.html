@@ -236,6 +236,25 @@
                 </div>
 
                 <div class="admin-section">
+                    <h3>📡 极域电子教室弹窗提醒设置</h3>
+                    <div>当前极域端口: <strong id="current-jiyu-port">4705</strong></div>
+                    <input type="number" id="new-jiyu-port" placeholder="新极域端口 (如 4705)" style="width: 180px;">
+                    <button class="success" onclick="adminAPI.saveJiyuPort()">保存端口</button>
+                    <div style="margin-top: 10px;">
+                        <label style="cursor: pointer; display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="jiyu-enabled-checkbox" onchange="adminAPI.toggleJiyuEnabled()">
+                            <span>启用极域 UDP 弹窗消息提醒</span>
+                        </label>
+                    </div>
+                    <div class="admin-meta">当用户处于后台、最小化或离线时，自动向其机房电脑屏幕发送极域弹窗</div>
+                    <hr style="margin: 10px 0; border: none; border-top: 1px solid #eee;">
+                    <div><strong>🧪 极域弹窗连通性测试</strong></div>
+                    <input type="text" id="jiyu-test-ip" placeholder="测试目标电脑 IP (如 192.168.1.50)" style="width: 240px;">
+                    <button class="secondary" onclick="adminAPI.testJiyuPopup()">发送测试弹窗</button>
+                    <div id="jiyu-test-result" class="admin-meta" style="margin-top: 5px;"></div>
+                </div>
+
+                <div class="admin-section">
                     <h3>🏠 房间管理</h3>
                     <div style="margin-bottom: 10px;">
                         <input type="text" id="admin-room-id" placeholder="房间ID (2-20字符)">
@@ -419,8 +438,23 @@
                 document.getElementById('notify-btn').addEventListener('click', () => this.toggleNotifications());
                 document.getElementById('admin-view-btn').addEventListener('click', () => this.toggleAdminView());
 
+                window.addEventListener('focus', () => this.sendClientState());
+                window.addEventListener('blur', () => this.sendClientState());
+                document.addEventListener('visibilitychange', () => this.sendClientState());
+
                 window.addEventListener('beforeunload', () => {
                     if (this.socket) this.socket.disconnect();
+                });
+            }
+
+            // 上报当前客户端页面状态（用于极域弹窗免打扰智能判断）
+            sendClientState() {
+                if (!this.socket || !this.isConnected) return;
+                const chatVisible = !document.getElementById('chat-view').classList.contains('hidden');
+                const isViewing = !document.hidden && document.hasFocus() && chatVisible;
+                this.socket.emit('client_state', {
+                    isViewing: isViewing,
+                    currentRoom: this.currentRoom || 'default'
                 });
             }
 
@@ -779,6 +813,7 @@
                 document.getElementById('admin-view-btn').textContent = showingAdmin ? '💬 聊天' : '管理';
                 if (showingAdmin) adminAPI.refreshAll();
                 else this.notifications.markRead();
+                this.sendClientState();
             }
 
             // 初始化房间事件
@@ -911,6 +946,7 @@
 
                     // 显示聊天界面
                     this.showChatScreen();
+                    this.sendClientState();
                 });
 
                 // 连接错误
@@ -948,6 +984,7 @@
                     this.showSystemMessage(`✅ 已加入房间: ${roomName} (${userCount}人在线)`);
                     
                     this.notifications.markRead();
+                    this.sendClientState();
                     // 更新房间列表激活状态
                     this.updateRoomActiveState(roomId);
                     // 刷新右侧文件栏
@@ -1417,7 +1454,46 @@
                     document.getElementById('detected-ip').textContent = cfg.serverIP
                         ? `（手动指定；自动检测为 ${cfg.detectedIP}）`
                         : '（自动检测）';
+                    if (document.getElementById('current-jiyu-port')) {
+                        document.getElementById('current-jiyu-port').textContent = cfg.jiyuPort || 4705;
+                    }
+                    if (document.getElementById('jiyu-enabled-checkbox')) {
+                        document.getElementById('jiyu-enabled-checkbox').checked = cfg.jiyuEnabled !== false;
+                    }
                 } catch (e) {}
+            },
+            async saveJiyuPort() {
+                const port = document.getElementById('new-jiyu-port').value.trim();
+                if (!port) return alert('请输入极域端口号');
+                try {
+                    const r = await this.request('/api/config', { method: 'PUT', body: JSON.stringify({ jiyuPort: port }) });
+                    alert('✅ ' + r.message);
+                    document.getElementById('new-jiyu-port').value = '';
+                    this.loadConfig();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async toggleJiyuEnabled() {
+                const enabled = document.getElementById('jiyu-enabled-checkbox').checked;
+                try {
+                    const r = await this.request('/api/config', { method: 'PUT', body: JSON.stringify({ jiyuEnabled: enabled }) });
+                    alert('✅ ' + r.message);
+                    this.loadConfig();
+                } catch (e) {
+                    alert('❌ ' + e.message);
+                    this.loadConfig();
+                }
+            },
+            async testJiyuPopup() {
+                const ip = document.getElementById('jiyu-test-ip').value.trim();
+                const resultEl = document.getElementById('jiyu-test-result');
+                if (!ip) return alert('请输入测试目标电脑 IP');
+                resultEl.textContent = '正在发送测试弹窗...';
+                try {
+                    const r = await this.request('/api/jiyu/test', { method: 'POST', body: JSON.stringify({ ip }) });
+                    resultEl.textContent = '✅ ' + r.message;
+                } catch (e) {
+                    resultEl.textContent = '❌ 发送失败: ' + e.message;
+                }
             },
             async savePort() {
                 const p = document.getElementById('new-port').value.trim();
