@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>内网聊天室 - 支持Markdown和多房间</title>
+    <title>BetterLanTalk 内网聊天室</title>
     <style>
         * {
             margin: 0;
@@ -45,6 +45,7 @@
             flex: 1;
             display: flex;
             flex-direction: column;
+            position: relative;
         }
         
         .login-form {
@@ -564,6 +565,246 @@
             margin-bottom: 10px;
         }
 
+        /* 登录页标签按钮 */
+        .tab-btn {
+            flex: 1;
+            padding: 10px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 15px;
+        }
+        .tab-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        /* 管理视图按钮 */
+        #admin-view-btn {
+            background: #f39c12;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            padding: 5px 12px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        /* 管理面板样式 */
+        .admin-section {
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .admin-section h3 { margin-bottom: 10px; color: #2c3e50; }
+        .admin-section input, .admin-section textarea {
+            padding: 8px; margin: 4px 0; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
+        }
+        .admin-section button {
+            background: #007bff; color: white; border: none; border-radius: 4px;
+            padding: 8px 14px; cursor: pointer; margin: 2px; font-size: 13px;
+        }
+        .admin-section button.danger { background: #dc3545; }
+        .admin-section button.secondary { background: #6c757d; }
+        .admin-section button.success { background: #28a745; }
+        .admin-item {
+            padding: 10px; margin: 6px 0; background: #f8f9fa; border-radius: 6px;
+            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;
+        }
+        .admin-meta { font-size: 12px; color: #6c757d; }
+        .muted-tag { color: #dc3545; font-weight: bold; }
+
+        /* ===== 文件传输样式 ===== */
+        .attach-button {
+            padding: 0 16px;
+            height: 60px;
+            background: #95a5a6;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 20px;
+            transition: background 0.3s;
+        }
+        .attach-button:hover { background: #7f8c8d; }
+        .attach-button:disabled { background: #bdc3c7; cursor: not-allowed; }
+
+        .upload-preview {
+            padding: 8px 20px;
+            background: #eef2ff;
+            border-top: 1px solid #dde3ff;
+            font-size: 13px;
+            color: #4a5568;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .upload-preview .upload-item {
+            background: white;
+            border: 1px solid #ccd4f0;
+            border-radius: 6px;
+            padding: 4px 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .upload-preview .upload-item.remove {
+            cursor: pointer;
+            color: #e74c3c;
+            font-weight: bold;
+        }
+        .upload-preview .upload-status { color: #667eea; }
+
+        /* 右侧文件栏 */
+        .file-panel {
+            width: 250px;
+            background: #f4f6f8;
+            border-left: 1px solid #e1e6ea;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            transition: width 0.25s;
+        }
+        .file-panel.collapsed { width: 42px; }
+        .file-panel.collapsed .file-list,
+        .file-panel.collapsed .file-panel-title { display: none; }
+        .file-panel.collapsed .file-panel-header {
+            justify-content: center;
+            padding: 12px 4px;
+        }
+        .file-panel-header {
+            padding: 12px 10px;
+            font-weight: bold;
+            color: #2c3e50;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            white-space: nowrap;
+        }
+        #file-panel-toggle {
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            font-size: 14px;
+            color: #667eea;
+            flex-shrink: 0;
+        }
+        .file-list { flex: 1; overflow-y: auto; padding: 0 10px 10px; }
+        .file-empty { color: #95a5a6; font-size: 13px; text-align: center; padding: 20px 0; }
+        .file-entry {
+            background: white;
+            border: 1px solid #e1e6ea;
+            border-radius: 8px;
+            padding: 8px 10px;
+            margin-bottom: 8px;
+            font-size: 13px;
+        }
+        .file-entry .file-name {
+            font-weight: bold;
+            color: #2c3e50;
+            word-break: break-all;
+            margin-bottom: 3px;
+        }
+        .file-entry .file-meta { color: #95a5a6; font-size: 11px; margin-bottom: 6px; }
+        .file-entry .file-actions { display: flex; gap: 6px; }
+        .file-entry .file-actions a, .file-entry .file-actions button {
+            font-size: 12px;
+            padding: 3px 10px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            background: #667eea;
+            color: white;
+        }
+        .file-entry.expired { opacity: 0.65; border-style: dashed; }
+        .file-entry.expired .file-name { color: #95a5a6; text-decoration: line-through; }
+        .expired-tag {
+            display: inline-block;
+            background: #ffeaa7;
+            color: #b8860b;
+            border-radius: 4px;
+            padding: 1px 6px;
+            font-size: 11px;
+            margin-left: 4px;
+        }
+
+        /* 消息里的文件/图片 */
+        .message .msg-file-card {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 8px;
+            padding: 10px;
+        }
+        .message.other .msg-file-card { background: #f1f3f5; }
+        .message .msg-file-card .file-icon { font-size: 26px; }
+        .message .msg-file-card .file-info { flex: 1; min-width: 0; }
+        .message .msg-file-card .file-info .fname { font-weight: bold; word-break: break-all; }
+        .message .msg-file-card .file-info .fmeta { font-size: 11px; opacity: 0.75; }
+        .message .msg-file-card a.dl {
+            background: #667eea;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+        .message .msg-image img {
+            max-width: 100%;
+            max-height: 320px;
+            border-radius: 8px;
+            cursor: zoom-in;
+            display: block;
+        }
+        .message .expired-media {
+            background: rgba(0,0,0,0.08);
+            border: 1px dashed #bbb;
+            border-radius: 8px;
+            padding: 14px;
+            color: #888;
+            font-size: 13px;
+        }
+
+        /* 右上角限时提示（用户进出等） */
+        .toast-container {
+            position: absolute;
+            top: 62px;
+            right: 16px;
+            z-index: 900;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            pointer-events: none;
+            max-width: 280px;
+        }
+        .toast {
+            background: rgba(44, 62, 80, 0.92);
+            color: white;
+            padding: 8px 14px;
+            border-radius: 18px;
+            font-size: 13px;
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+            animation: toastIn 0.25s ease-out;
+            transition: opacity 0.4s, transform 0.4s;
+            pointer-events: auto;
+            word-break: break-all;
+        }
+        .toast.hide { opacity: 0; transform: translateX(24px); }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(30px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
         /* 响应式设计 */
         @media (max-width: 768px) {
             .chat-container {
@@ -579,32 +820,48 @@
             .message {
                 max-width: 85%;
             }
+
+            /* 小屏时文件栏横向铺满（折叠态收起高度） */
+            #chat-view { flex-direction: column; }
+            .file-panel { width: 100%; max-height: 180px; border-left: none; border-top: 1px solid #e1e6ea; }
+            .file-panel.collapsed { width: 100%; max-height: 40px; overflow: hidden; }
         }
     </style>
 </head>
 <body>
     <!-- 登录界面 -->
     <div id="login-screen" class="login-form">
-        <h1>💬 内网聊天室</h1>
-        
-        <div style="margin-bottom: 20px; text-align: left;">
-            <label for="server-input" style="display: block; margin-bottom: 5px; color: #666;">服务器地址:</label>
-            <input type="text" id="server-input" placeholder="输入服务器IP (如: 192.168.2.10)" value="192.168.2.10">
-            <div style="font-size: 12px; color: #888; margin-top: 2px;">端口: 3001 (固定)</div>
+        <h1>💬 BetterLanTalk</h1>
+
+        <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+            <button id="tab-login" class="tab-btn active">登录</button>
+            <button id="tab-register" class="tab-btn">注册</button>
         </div>
-        
-        <input type="text" id="username-input" placeholder="请输入你的用户名 (2-20字符)" maxlength="20">
-        
-        <button id="join-button">加入聊天</button>
-        
+
+        <div id="server-row" style="margin-bottom: 15px; text-align: left;">
+            <label for="server-input" style="display: block; margin-bottom: 5px; color: #666;">服务器地址:</label>
+            <input type="text" id="server-input" placeholder="如 http://192.168.2.10:3001">
+        </div>
+
+        <input type="text" id="username-input" placeholder="请输入用户名 (2-20字符)" maxlength="20">
+        <input type="password" id="password-input" placeholder="密码 (至少6位)">
+        <input type="password" id="password2-input" placeholder="确认密码" class="hidden">
+
+        <label style="display: block; text-align: left; margin: 8px 0; font-size: 14px; color: #555;">
+            <input type="checkbox" id="remember-me" checked> 记住我（自动登录）
+        </label>
+
+        <button id="auth-button">登录</button>
+        <div id="auth-error" style="color: #e74c3c; margin-top: 10px; font-size: 13px; min-height: 18px;"></div>
+
         <div class="server-info">
             💡 使用说明:<br>
-            1. 输入服务器电脑的IP地址<br>
-            2. 输入你的用户名<br>
-            3. 点击"加入聊天"开始聊天<br>
-            4. 按Enter发送，Shift+Enter换行<br>
-            5. 📝 支持Markdown语法<br>
-            6. 🏠 支持多房间聊天
+            1. 在浏览器中访问 <code>http://服务器IP:3001/</code> 即可<br>
+            2. 首次使用请先注册账号（每个IP限注册一个）<br>
+            3. 按Enter发送，Shift+Enter换行<br>
+            4. 📝 支持Markdown语法<br>
+            5. 🏠 支持多房间聊天<br>
+            6. 📎 支持文件传输：图片显示在消息中，其他文件在右侧栏；支持 Ctrl+V 粘贴图片，单文件与总量上限可在管理面板调整
         </div>
     </div>
 
@@ -645,12 +902,21 @@
         <div class="main-content">
             <div class="chat-header">
                 <h2 id="current-room">公共聊天室 <span id="connection-status" class="connection-status status-disconnected">未连接</span></h2>
-                <div id="online-count">在线: 1人</div>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button id="notify-btn" title="开启浏览器通知" style="background: rgba(255,255,255,0.15); color: white; border: none; border-radius: 5px; padding: 5px 10px; cursor: pointer; font-size: 13px;">🔔 通知</button>
+                    <button id="logout-btn" title="退出登录" style="background: rgba(255,255,255,0.15); color: white; border: none; border-radius: 5px; padding: 5px 10px; cursor: pointer; font-size: 13px;">退出</button>
+                    <button id="admin-view-btn" class="hidden">🛡️ 管理</button>
+                    <div id="online-count">在线: 1人</div>
+                </div>
             </div>
 
+            <div id="toast-container" class="toast-container"></div>
+
+            <div id="chat-view" style="flex: 1; display: flex; flex-direction: row; min-height: 0;">
+            <div style="flex: 1; display: flex; flex-direction: column; min-width: 0;">
             <div class="messages-container" id="messages-container">
                 <div class="message system">
-                    欢迎来到内网聊天室！支持Markdown语法和多房间功能。
+                    欢迎来到内网聊天室！支持Markdown语法、多房间和文件传输。
                     <div class="markdown-hint">
                         <a href="javascript:void(0)" onclick="showMarkdownHelp()">📝 查看Markdown语法帮助</a>
                     </div>
@@ -659,7 +925,11 @@
 
             <div class="typing-indicator" id="typing-indicator"></div>
 
+            <div id="upload-preview" class="upload-preview hidden"></div>
+
             <div class="input-area">
+                <input type="file" id="file-input" class="hidden" multiple>
+                <button id="attach-btn" class="attach-button" title="发送文件（也可拖拽或 Ctrl+V 粘贴图片）">📎</button>
                 <textarea 
                     id="message-input" 
                     class="message-input" 
@@ -669,6 +939,80 @@
                     disabled
                 ></textarea>
                 <button id="send-button" class="send-button" disabled>发送</button>
+            </div>
+            </div>
+
+            <!-- 右侧文件栏 -->
+            <div id="file-panel" class="file-panel">
+                <div class="file-panel-header">
+                    <span class="file-panel-title">📁 房间文件</span>
+                    <button id="file-panel-toggle" title="收起文件栏">▸</button>
+                </div>
+                <div id="file-list" class="file-list">
+                    <div class="file-empty">暂无文件</div>
+                </div>
+            </div>
+            </div>
+
+            <!-- 管理面板 -->
+            <div id="admin-view" class="hidden" style="flex: 1; overflow-y: auto; padding: 15px; background: #f5f5f5;">
+                <div class="admin-section">
+                    <h3>📊 服务器状态</h3>
+                    <div id="server-status">加载中...</div>
+                    <button class="secondary" onclick="adminAPI.loadStatus()">刷新状态</button>
+                </div>
+
+                <div class="admin-section">
+                    <h3>⚙️ 服务器设置</h3>
+                    <div>当前端口: <strong id="current-port">-</strong></div>
+                    <input type="number" id="new-port" placeholder="新端口 (1-65535)" style="width: 180px;">
+                    <button class="success" onclick="adminAPI.savePort()">保存端口</button>
+                    <div class="admin-meta">⚠️ 保存后需重启服务器才能生效</div>
+                    <hr style="margin: 10px 0; border: none; border-top: 1px solid #eee;">
+                    <div>单文件上限: <strong id="current-max-file">-</strong> MB</div>
+                    <div>上传目录总上限: <strong id="current-max-uploads">-</strong> MB</div>
+                    <input type="number" id="new-max-file" placeholder="单文件上限 (MB)" style="width: 180px;">
+                    <input type="number" id="new-max-uploads" placeholder="目录总上限 (MB)" style="width: 180px;">
+                    <button class="success" onclick="adminAPI.saveFileLimits()">保存文件限制</button>
+                    <div class="admin-meta">保存后立即生效；超出总量时自动清理最早上传的文件</div>
+                </div>
+
+                <div class="admin-section">
+                    <h3>🏠 房间管理</h3>
+                    <div style="margin-bottom: 10px;">
+                        <input type="text" id="admin-room-id" placeholder="房间ID (2-20字符)">
+                        <input type="text" id="admin-room-name" placeholder="房间名称 (可选)">
+                        <button class="success" onclick="adminAPI.createRoom()">创建房间</button>
+                        <button class="secondary" onclick="adminAPI.loadRooms()">刷新</button>
+                    </div>
+                    <div id="admin-rooms-list">加载中...</div>
+                </div>
+
+                <div class="admin-section">
+                    <h3>👥 账号管理</h3>
+                    <button class="secondary" onclick="adminAPI.loadAccounts()">刷新</button>
+                    <div id="admin-accounts-list">加载中...</div>
+                </div>
+
+                <div class="admin-section">
+                    <h3>🟢 在线用户</h3>
+                    <button class="secondary" onclick="adminAPI.loadOnline()">刷新</button>
+                    <div id="admin-online-list">加载中...</div>
+                </div>
+
+                <div class="admin-section">
+                    <h3>🔇 IP禁言管理</h3>
+                    <input type="text" id="admin-ip-input" placeholder="IP地址">
+                    <button class="danger" onclick="adminAPI.muteIP()">禁言IP</button>
+                    <button class="success" onclick="adminAPI.unmuteIP()">解除禁言</button>
+                    <div id="admin-muted-list"></div>
+                </div>
+
+                <div class="admin-section">
+                    <h3>📢 广播消息</h3>
+                    <textarea id="admin-broadcast" rows="3" style="width: 100%;" placeholder="输入广播内容..."></textarea>
+                    <button onclick="adminAPI.broadcast()">发送广播</button>
+                </div>
             </div>
         </div>
     </div>
@@ -698,7 +1042,15 @@
 
     <div id="overlay" class="help-overlay"></div>
 
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script>
+        // 优先使用服务器本地加载的 socket.io 客户端，file:// 方式打开时回退到 CDN
+        (function() {
+            var src = (location.protocol === 'file:')
+                ? 'https://cdn.socket.io/4.7.2/socket.io.min.js'
+                : '/socket.io/socket.io.js';
+            document.write('<script src="' + src + '"><\/script>');
+        })();
+    </script>
     <script>
         // 消息类型定义
         const MessageType = {
@@ -716,68 +1068,447 @@
                 this.currentRoom = 'default';
                 this.typingTimeout = null;
                 this.isConnected = false;
-                
+                this.authToken = null;
+                this.userRole = 'user';
+                this.authMode = 'login'; // 'login' | 'register'
+                this.serverOrigin = '';
+                this.notifyEnabled = localStorage.getItem('lantalk_notify') === 'on';
+                this.pendingFiles = [];   // 待上传文件
+                this.uploading = false;
+                this.limits = { maxFileMB: 5120, maxUploadsMB: 20480 };
+                this.expiredFiles = new Set();
+
                 this.initializeEventListeners();
                 this.initializeRoomEvents();
                 console.log('聊天室应用初始化完成');
-            }
+        }
 
             // 初始化事件监听器
             initializeEventListeners() {
-                const joinButton = document.getElementById('join-button');
                 const usernameInput = document.getElementById('username-input');
+                const passwordInput = document.getElementById('password-input');
+                const password2Input = document.getElementById('password2-input');
                 const serverInput = document.getElementById('server-input');
                 const messageInput = document.getElementById('message-input');
                 const sendButton = document.getElementById('send-button');
+                const authButton = document.getElementById('auth-button');
+                const tabLogin = document.getElementById('tab-login');
+                const tabRegister = document.getElementById('tab-register');
 
-                // 加入聊天室
-                joinButton.addEventListener('click', () => {
-                    const username = usernameInput.value.trim();
-                    const serverIP = serverInput.value.trim();
-                    this.joinChat(username, serverIP);
+                tabLogin.addEventListener('click', () => this.switchAuthMode('login'));
+                tabRegister.addEventListener('click', () => this.switchAuthMode('register'));
+
+                authButton.addEventListener('click', () => this.handleAuth());
+                [usernameInput, passwordInput, password2Input, serverInput].forEach(el => {
+                    el.addEventListener('keypress', (e) => {
+                        if (e.key === 'Enter') this.handleAuth();
+                    });
                 });
 
-                // 回车键加入聊天
-                usernameInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') {
-                        const username = usernameInput.value.trim();
-                        const serverIP = serverInput.value.trim();
-                        this.joinChat(username, serverIP);
-                    }
-                });
-
-                serverInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') {
-                        const username = usernameInput.value.trim();
-                        const serverIP = serverInput.value.trim();
-                        this.joinChat(username, serverIP);
-                    }
-                });
-
-                // 发送消息
                 sendButton.addEventListener('click', () => this.sendMessage());
-                
-                // 回车键发送消息
                 messageInput.addEventListener('keypress', (e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         this.sendMessage();
                     }
                 });
+                messageInput.addEventListener('input', () => this.handleTyping());
 
-                // 输入状态检测
-                messageInput.addEventListener('input', () => {
-                    this.handleTyping();
+                // 文件传输
+                document.getElementById('attach-btn').addEventListener('click', () => document.getElementById('file-input').click());
+                document.getElementById('file-input').addEventListener('change', (e) => {
+                    this.handleFileSelect(e.target.files);
+                    e.target.value = '';
+                });
+                messageInput.addEventListener('paste', (e) => this.handlePaste(e));
+                const dropZone = document.querySelector('.messages-container');
+                dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.outline = '2px dashed #667eea'; });
+                dropZone.addEventListener('dragleave', () => { dropZone.style.outline = ''; });
+                dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.style.outline = ''; this.handleDrop(e); });
+                document.getElementById('file-panel-toggle').addEventListener('click', () => {
+                    const panel = document.getElementById('file-panel');
+                    panel.classList.toggle('collapsed');
+                    const collapsed = panel.classList.contains('collapsed');
+                    const btn = document.getElementById('file-panel-toggle');
+                    btn.textContent = collapsed ? '◂' : '▸';
+                    btn.title = collapsed ? '展开文件栏' : '收起文件栏';
                 });
 
-                // 页面卸载时断开连接
+                document.getElementById('logout-btn').addEventListener('click', () => this.logout());
+                document.getElementById('notify-btn').addEventListener('click', () => this.toggleNotifications());
+                document.getElementById('admin-view-btn').addEventListener('click', () => this.toggleAdminView());
+
                 window.addEventListener('beforeunload', () => {
-                    if (this.socket) {
-                        this.socket.disconnect();
-                    }
+                    if (this.socket) this.socket.disconnect();
                 });
+            }
 
-                console.log('事件监听器初始化完成');
+            switchAuthMode(mode) {
+                this.authMode = mode;
+                document.getElementById('tab-login').classList.toggle('active', mode === 'login');
+                document.getElementById('tab-register').classList.toggle('active', mode === 'register');
+                document.getElementById('password2-input').classList.toggle('hidden', mode === 'login');
+                document.getElementById('auth-button').textContent = mode === 'login' ? '登录' : '注册';
+                document.getElementById('auth-error').textContent = '';
+            }
+
+            // 登录 / 注册
+            async handleAuth() {
+                const username = document.getElementById('username-input').value.trim();
+                const password = document.getElementById('password-input').value;
+                const password2 = document.getElementById('password2-input').value;
+                const errEl = document.getElementById('auth-error');
+                errEl.textContent = '';
+
+                if (username.length < 2 || username.length > 20) { errEl.textContent = '用户名长度应为2-20个字符'; return; }
+                if (password.length < 6) { errEl.textContent = '密码长度至少6位'; return; }
+                if (this.authMode === 'register' && password !== password2) { errEl.textContent = '两次输入的密码不一致'; return; }
+
+                const origin = this.resolveServerOrigin();
+                if (!origin) { errEl.textContent = '请输入服务器地址'; return; }
+
+                const btn = document.getElementById('auth-button');
+                btn.disabled = true;
+                btn.textContent = '连接中...';
+
+                try {
+                    const url = origin + (this.authMode === 'login' ? '/api/login' : '/api/register');
+                    const resp = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password })
+                    });
+                    const data = await resp.json();
+                    if (!resp.ok) {
+                        errEl.textContent = data.error || '操作失败';
+                        return;
+                    }
+                    this.onAuthSuccess(data, origin);
+                } catch (e) {
+                    errEl.textContent = '无法连接服务器: ' + origin;
+                } finally {
+                    btn.disabled = false;
+                    btn.textContent = this.authMode === 'login' ? '登录' : '注册';
+                }
+            }
+
+            onAuthSuccess(data, origin) {
+                this.authToken = data.token;
+                this.currentUser = data.username;
+                this.userRole = data.role || 'user';
+                this.serverOrigin = origin;
+
+                const remember = document.getElementById('remember-me').checked;
+                const store = remember ? localStorage : sessionStorage;
+                store.setItem('lantalk_auth', JSON.stringify({
+                    token: data.token, username: data.username, role: data.userRole || data.role, origin
+                }));
+
+                if (this.userRole === 'admin') {
+                    document.getElementById('admin-view-btn').classList.remove('hidden');
+                }
+                this.connectToServer(origin);
+            }
+
+            resolveServerOrigin() {
+                if (location.protocol !== 'file:') return location.origin;
+                let v = document.getElementById('server-input').value.trim();
+                if (!v) return '';
+                if (!/^https?:\/\//.test(v)) v = 'http://' + v;
+                return v.replace(/\/$/, '');
+            }
+
+            // 自动登录：用保存的 token 验证
+            async tryAutoLogin() {
+                const raw = localStorage.getItem('lantalk_auth') || sessionStorage.getItem('lantalk_auth');
+                if (!raw) return;
+                let saved;
+                try { saved = JSON.parse(raw); } catch (e) { return; }
+                if (!saved.token || !saved.origin) return;
+
+                // 预填充
+                document.getElementById('username-input').value = saved.username || '';
+                if (location.protocol === 'file:') document.getElementById('server-input').value = saved.origin;
+
+                try {
+                    const resp = await fetch(saved.origin + '/api/me', {
+                        headers: { 'Authorization': 'Bearer ' + saved.token }
+                    });
+                    if (!resp.ok) return;
+                    const me = await resp.json();
+                    this.authToken = saved.token;
+                    this.currentUser = me.username;
+                    this.userRole = me.role || 'user';
+                    this.serverOrigin = saved.origin;
+                    if (this.userRole === 'admin') {
+                        document.getElementById('admin-view-btn').classList.remove('hidden');
+                    }
+                    this.connectToServer(saved.origin);
+                } catch (e) {
+                    console.log('自动登录失败，需要手动登录');
+                }
+            }
+
+            logout() {
+                const token = this.authToken;
+                if (token && this.serverOrigin) {
+                    fetch(this.serverOrigin + '/api/logout', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token }
+                    }).catch(() => {});
+                }
+                localStorage.removeItem('lantalk_auth');
+                sessionStorage.removeItem('lantalk_auth');
+                if (this.socket) this.socket.disconnect();
+                location.reload();
+            }
+
+            // 通知
+            async toggleNotifications() {
+                if (!('Notification' in window)) {
+                    alert('当前浏览器不支持通知');
+                    return;
+                }
+                if (Notification.permission === 'granted') {
+                    this.notifyEnabled = !this.notifyEnabled;
+                } else {
+                    const perm = await Notification.requestPermission();
+                    this.notifyEnabled = perm === 'granted';
+                }
+                localStorage.setItem('lantalk_notify', this.notifyEnabled ? 'on' : 'off');
+                this.updateNotifyBtn();
+            }
+
+            updateNotifyBtn() {
+                const btn = document.getElementById('notify-btn');
+                btn.style.background = this.notifyEnabled && Notification.permission === 'granted'
+                    ? '#27ae60' : 'rgba(255,255,255,0.15)';
+            }
+
+            maybeNotify(message) {
+                if (!this.notifyEnabled || Notification.permission !== 'granted') return;
+                if (!document.hidden) return;
+                if (message.username === this.currentUser) return;
+                let body;
+                if (message.type === 'text') {
+                    body = (message.content || '').replace(/[#*`>\[\]()~_-]/g, '').trim();
+                    if (body.length > 80) body = body.slice(0, 80) + '...';
+                } else if (message.type === 'file') {
+                    body = (message.isImage ? '📷 发送了图片: ' : '📎 发送了文件: ') + (message.name || '');
+                } else {
+                    return;
+                }
+                const n = new Notification(message.username, { body });
+                n.onclick = () => { window.focus(); n.close(); };
+            }
+
+            // 右上角限时提示
+            showToast(text) {
+                const container = document.getElementById('toast-container');
+                if (!container) return;
+                const el = document.createElement('div');
+                el.className = 'toast';
+                el.textContent = text;
+                container.appendChild(el);
+                setTimeout(() => {
+                    el.classList.add('hide');
+                    setTimeout(() => el.remove(), 450);
+                }, 3000);
+            }
+
+            // ===== 文件传输 =====
+            formatSize(bytes) {
+                if (bytes < 1024) return bytes + ' B';
+                if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+                if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+                return (bytes / 1073741824).toFixed(2) + ' GB';
+            }
+
+            async loadLimits() {
+                try {
+                    const r = await fetch(this.serverOrigin + '/api/limits');
+                    if (r.ok) this.limits = await r.json();
+                } catch (e) {}
+            }
+
+            handleFileSelect(fileList) {
+                Array.from(fileList || []).forEach(f => this.uploadFile(f));
+            }
+
+            handlePaste(e) {
+                if (!e.clipboardData) return;
+                const files = Array.from(e.clipboardData.files || []);
+                if (files.length) {
+                    e.preventDefault();
+                    files.forEach(f => this.uploadFile(f));
+                }
+            }
+
+            handleDrop(e) {
+                const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+                files.forEach(f => this.uploadFile(f));
+            }
+
+            renderUploadPreview() {
+                const el = document.getElementById('upload-preview');
+                if (!this.pendingFiles.length) {
+                    el.classList.add('hidden');
+                    el.innerHTML = '';
+                    return;
+                }
+                el.classList.remove('hidden');
+                el.innerHTML = this.pendingFiles.map(p => `
+                    <div class="upload-item">
+                        <span>📄 ${this.escapeHtml(p.name)} (${this.formatSize(p.size)})</span>
+                        <span class="upload-status">${p.status}</span>
+                    </div>`).join('');
+            }
+
+            async uploadFile(file) {
+                if (!file) return;
+                if (!this.socket || !this.isConnected) {
+                    alert('尚未连接服务器，无法上传');
+                    return;
+                }
+                const maxBytes = this.limits.maxFileMB * 1024 * 1024;
+                if (file.size > maxBytes) {
+                    alert(`文件 "${file.name}" 超过单文件上限 ${this.limits.maxFileMB}MB`);
+                    return;
+                }
+                if (file.size === 0) {
+                    alert('不能上传空文件');
+                    return;
+                }
+
+                const item = { name: file.name || ('粘贴文件-' + Date.now()), size: file.size, status: '上传中...' };
+                this.pendingFiles.push(item);
+                this.renderUploadPreview();
+
+                try {
+                    const resp = await fetch(
+                        this.serverOrigin + '/api/upload?room=' + encodeURIComponent(this.currentRoom),
+                        {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': 'Bearer ' + this.authToken,
+                                'x-filename': encodeURIComponent(item.name),
+                                'x-mime': file.type || 'application/octet-stream',
+                                'Content-Type': 'application/octet-stream'
+                            },
+                            body: file
+                        }
+                    );
+                    const data = await resp.json().catch(() => ({}));
+                    if (!resp.ok) {
+                        item.status = '❌ ' + (data.error || '上传失败');
+                    } else {
+                        item.status = '✅ 已发送';
+                        this.socket.emit('send_file', {
+                            storedName: data.file.storedName,
+                            roomId: this.currentRoom
+                        });
+                    }
+                } catch (err) {
+                    item.status = '❌ 上传失败: ' + err.message;
+                }
+                this.renderUploadPreview();
+                // 3秒后移除已完成项
+                const idx = this.pendingFiles.indexOf(item);
+                setTimeout(() => {
+                    if (idx > -1) this.pendingFiles.splice(idx, 1);
+                    else this.pendingFiles = this.pendingFiles.filter(p => p !== item);
+                    this.renderUploadPreview();
+                }, 3000);
+            }
+
+            // 右侧文件栏
+            async loadFilePanel() {
+                if (!this.serverOrigin || !this.authToken) return;
+                try {
+                    const resp = await fetch(
+                        this.serverOrigin + '/api/files?room=' + encodeURIComponent(this.currentRoom),
+                        { headers: { 'Authorization': 'Bearer ' + this.authToken } }
+                    );
+                    if (!resp.ok) return;
+                    const files = await resp.json();
+                    this.renderFilePanel(files);
+                } catch (e) {}
+            }
+
+            renderFilePanel(files) {
+                const el = document.getElementById('file-list');
+                if (!this.expiredFiles) this.expiredFiles = new Set();
+                files.forEach(f => { if (f.expired) this.expiredFiles.add(f.storedName); });
+                if (!files.length) {
+                    el.innerHTML = '<div class="file-empty">暂无文件</div>';
+                    return;
+                }
+                el.innerHTML = files.map(f => `
+                    <div class="file-entry ${f.expired ? 'expired' : ''}" data-stored="${this.escapeHtml(f.storedName)}">
+                        <div class="file-name">${this.escapeHtml(f.name)}${f.expired ? '<span class="expired-tag">已过期</span>' : ''}</div>
+                        <div class="file-meta">${this.formatSize(f.size)} • ${this.escapeHtml(f.uploader)} • ${new Date(f.createdAt).toLocaleString()}</div>
+                        <div class="file-actions">
+                            ${f.expired
+                                ? '<button disabled style="background:#bdc3c7;">已过期</button>'
+                                : `<a href="${this.serverOrigin}${f.url}" target="_blank" download="${this.escapeHtml(f.name)}">下载</a>`}
+                        </div>
+                    </div>`).join('');
+            }
+
+            markFileExpired(storedName) {
+                if (!this.expiredFiles) this.expiredFiles = new Set();
+                this.expiredFiles.add(storedName);
+                const entry = document.querySelector(`.file-entry[data-stored="${CSS.escape(storedName)}"]`);
+                if (entry) {
+                    entry.classList.add('expired');
+                    const nameEl = entry.querySelector('.file-name');
+                    if (nameEl && !nameEl.querySelector('.expired-tag')) {
+                        nameEl.insertAdjacentHTML('beforeend', '<span class="expired-tag">已过期</span>');
+                    }
+                    const actions = entry.querySelector('.file-actions');
+                    if (actions) actions.innerHTML = '<button disabled style="background:#bdc3c7;">已过期</button>';
+                }
+            }
+
+            renderFileMessage(message) {
+                const time = new Date(message.timestamp).toLocaleTimeString();
+                const header = `
+                    <div class="message-header">
+                        ${this.escapeHtml(message.username)} • ${time}
+                    </div>`;
+                const expired = this.expiredFiles && this.expiredFiles.has(message.storedName);
+                const url = this.serverOrigin + message.fileUrl;
+
+                let body;
+                if (message.isImage) {
+                    body = expired
+                        ? `<div class="expired-media">⚠️ 图片已过期（因存储空间限制被清理）</div>`
+                        : `<div class="msg-image"><a href="${url}" target="_blank"><img src="${url}" alt="${this.escapeHtml(message.name)}" loading="lazy"></a></div>`;
+                } else {
+                    body = `
+                        <div class="msg-file-card">
+                            <div class="file-icon">📄</div>
+                            <div class="file-info">
+                                <div class="fname">${this.escapeHtml(message.name)}</div>
+                                <div class="fmeta">${this.formatSize(message.size)}${expired ? ' • ⚠️ 已过期' : ''}</div>
+                            </div>
+                            ${expired
+                                ? '<span style="font-size:12px;color:#e74c3c;">已过期</span>'
+                                : `<a class="dl" href="${url}" target="_blank" download="${this.escapeHtml(message.name)}">下载</a>`}
+                        </div>`;
+                }
+                return header + body;
+            }
+
+            toggleAdminView() {
+                const adminView = document.getElementById('admin-view');
+                const chatView = document.getElementById('chat-view');
+                const showingAdmin = adminView.classList.contains('hidden');
+                adminView.classList.toggle('hidden');
+                chatView.classList.toggle('hidden');
+                chatView.style.display = chatView.classList.contains('hidden') ? 'none' : 'flex';
+                document.getElementById('admin-view-btn').textContent = showingAdmin ? '💬 聊天' : '🛡️ 管理';
+                if (showingAdmin) adminAPI.refreshAll();
             }
 
             // 初始化房间事件
@@ -869,96 +1600,17 @@
                     `${roomName} <span id="connection-status" class="connection-status status-connected">已连接</span>`;
             }
 
-            // 加入聊天室
-            async joinChat(username, serverIP) {
-                if (!username) {
-                    alert('请输入用户名');
-                    return;
-                }
-
-                if (username.length < 2 || username.length > 20) {
-                    alert('用户名长度应为2-20个字符');
-                    return;
-                }
-
-                if (!serverIP) {
-                    alert('请输入服务器IP地址');
-                    return;
-                }
-
-                // 验证IP地址格式
-                if (!this.isValidIP(serverIP) && serverIP !== 'localhost') {
-                    alert('请输入有效的IP地址 (如: 192.168.1.100)');
-                    return;
-                }
-
-                this.currentUser = username;
-                const joinButton = document.getElementById('join-button');
-                joinButton.disabled = true;
-                joinButton.textContent = '连接中...';
-                joinButton.classList.add('loading');
-
-                try {
-                    // 显示连接状态
-                    this.showSystemMessage('正在连接服务器...');
-                    this.updateConnectionStatus('connecting');
-
-                    // 测试服务器连接
-                    const testResult = await this.testServerConnection(serverIP);
-                    if (!testResult) {
-                        this.resetJoinButton();
-                        return;
-                    }
-
-                    // 连接Socket.IO服务器
-                    this.connectToServer(serverIP);
-
-                } catch (error) {
-                    console.error('连接服务器失败:', error);
-                    this.showError('连接失败: ' + error.message);
-                    this.resetJoinButton();
-                }
-            }
-
-            // 重置加入按钮状态
-            resetJoinButton() {
-                const joinButton = document.getElementById('join-button');
-                joinButton.disabled = false;
-                joinButton.textContent = '加入聊天';
-                joinButton.classList.remove('loading');
-            }
-
-            // 验证IP地址格式
-            isValidIP(ip) {
-                const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-                if (!ipRegex.test(ip)) return false;
-                
-                const parts = ip.split('.');
-                return parts.every(part => {
-                    const num = parseInt(part, 10);
-                    return num >= 0 && num <= 255;
-                });
-            }
-
             // 连接服务器
-            connectToServer(serverIP) {
+            connectToServer(origin) {
                 try {
-                    // 如果是localhost，转换为127.0.0.1
-                    if (serverIP === 'localhost') {
-                        serverIP = '127.0.0.1';
-                    }
+                    console.log(`正在连接服务器: ${origin}`);
 
-                    const serverURL = `http://${serverIP}:3001`;
-                    console.log(`正在连接服务器: ${serverURL}`);
-
-                    // 检查Socket.IO是否已加载
                     if (typeof io === 'undefined') {
-                        this.showError('Socket.IO库加载失败，请检查网络连接');
-                        this.resetJoinButton();
+                        alert('Socket.IO库加载失败，请检查网络连接');
                         return;
                     }
 
-                    this.socket = io(serverURL, {
+                    this.socket = io(origin, {
                         timeout: 10000,
                         reconnectionAttempts: 3,
                         reconnectionDelay: 2000
@@ -968,35 +1620,6 @@
 
                 } catch (error) {
                     this.showError('连接失败: ' + error.message);
-                    this.resetJoinButton();
-                }
-            }
-
-            // 测试服务器连接
-            async testServerConnection(serverIP) {
-                try {
-                    const serverURL = `http://${serverIP}:3001/api/health`;
-                    console.log('测试服务器连接:', serverURL);
-                    
-                    const response = await fetch(serverURL, {
-                        method: 'GET',
-                        mode: 'cors',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        }
-                    });
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        console.log('服务器连接测试成功:', data);
-                        return true;
-                    } else {
-                        this.showError(`服务器连接失败: HTTP ${response.status}`);
-                        return false;
-                    }
-                } catch (error) {
-                    this.showError(`无法连接到服务器: ${serverIP}:3001\n\n可能的原因：\n• 服务器未启动\n• IP地址错误\n• 防火墙阻止了连接\n• 服务器不在同一网络`);
-                    return false;
                 }
             }
 
@@ -1013,8 +1636,8 @@
                     this.showSystemMessage('✅ 连接服务器成功！正在加入聊天室...');
 
                     // 加入默认房间
-                    this.socket.emit('join', { 
-                        username: this.currentUser,
+                    this.socket.emit('join', {
+                        token: this.authToken,
                         roomId: this.currentRoom
                     });
 
@@ -1028,7 +1651,6 @@
                     this.isConnected = false;
                     this.updateConnectionStatus('disconnected');
                     this.showError('❌ 连接错误: ' + (error.message || '未知错误'));
-                    this.resetJoinButton();
                 });
 
                 // 房间创建成功
@@ -1047,6 +1669,8 @@
                     
                     // 更新房间列表激活状态
                     this.updateRoomActiveState(roomId);
+                    // 刷新右侧文件栏
+                    this.loadFilePanel();
                 });
 
                 // 房间列表更新
@@ -1058,6 +1682,19 @@
                 // 接收消息
                 this.socket.on('message', (message) => {
                     this.displayMessage(message);
+                    this.maybeNotify(message);
+                    // 收到文件消息时立即刷新右侧文件栏
+                    if (message.type === 'file') this.loadFilePanel();
+                });
+
+                // 用户进入 / 离开（右上角限时提示）
+                this.socket.on('user_joined', (data) => {
+                    if (!data || !data.username || data.username === this.currentUser) return;
+                    this.showToast(`✅ ${data.username} 加入了${data.reason === 'switch' ? '房间' : '聊天室'}`);
+                });
+                this.socket.on('user_left', (data) => {
+                    if (!data || !data.username || data.username === this.currentUser) return;
+                    this.showToast(`👋 ${data.username} 离开了${data.reason === 'switch' ? '房间' : '聊天室'}`);
                 });
 
                 // 接收历史消息
@@ -1081,11 +1718,17 @@
                 // 错误处理
                 this.socket.on('error', (error) => {
                     console.error('Socket错误:', error);
-                    if (error.includes('禁言') || error.includes('无法创建房间')) {
-                        this.showError('❌ ' + error);
-                    } else {
-                        this.showError('❌ ' + error);
+                    if (typeof error === 'string' && error.includes('登录已过期')) {
+                        alert('登录已过期，请重新登录');
+                        this.logout();
+                        return;
                     }
+                    this.showError('❌ ' + error);
+                });
+
+                // 文件过期通知
+                this.socket.on('file_expired', (data) => {
+                    if (data && data.storedName) this.markFileExpired(data.storedName);
                 });
 
                 // 连接断开
@@ -1129,6 +1772,10 @@
                     console.log('已发送获取房间列表请求');
                 }
 
+                // 加载文件限制与房间文件列表
+                this.loadLimits();
+                this.loadFilePanel();
+
                 // 聚焦消息输入框
                 const messageInput = document.getElementById('message-input');
                 setTimeout(() => messageInput.focus(), 100);
@@ -1138,8 +1785,10 @@
             enableChatInput() {
                 const messageInput = document.getElementById('message-input');
                 const sendButton = document.getElementById('send-button');
+                const attachBtn = document.getElementById('attach-btn');
                 
                 messageInput.disabled = false;
+                attachBtn.disabled = false;
                 messageInput.placeholder = '输入消息... 支持Markdown语法 (按Enter发送，Shift+Enter换行)';
                 this.updateSendButtonState();
             }
@@ -1148,8 +1797,10 @@
             disableChatInput() {
                 const messageInput = document.getElementById('message-input');
                 const sendButton = document.getElementById('send-button');
+                const attachBtn = document.getElementById('attach-btn');
                 
                 messageInput.disabled = true;
+                attachBtn.disabled = true;
                 messageInput.placeholder = '与服务器断开连接，无法发送消息';
                 sendButton.disabled = true;
             }
@@ -1211,11 +1862,17 @@
             // 显示消息
             displayMessage(message) {
                 const container = document.getElementById('messages-container');
+
+                // 用户进出已改为右上角限时提示，不再占用消息区（历史消息同样跳过）
+                if (message.type === 'join' || message.type === 'leave') {
+                    return;
+                }
+
                 const messageElement = document.createElement('div');
                 
                 messageElement.className = `message ${
-                    message.type === 'join' || message.type === 'leave' 
-                        ? 'system' 
+                    message.type === 'admin'
+                        ? 'system'
                         : message.username === this.currentUser 
                             ? 'own' 
                             : 'other'
@@ -1224,8 +1881,11 @@
                 const time = new Date(message.timestamp).toLocaleTimeString();
                 
                 let content = '';
-                if (message.type === 'join' || message.type === 'leave') {
-                    content = `💬 ${message.content}`;
+                if (message.type === 'admin') {
+                    // 管理员/系统提示：套用大消息框
+                    content = this.escapeHtml(message.content).replace(/\n/g, '<br>');
+                } else if (message.type === 'file') {
+                    content = this.renderFileMessage(message);
                 } else {
                     let messageContent;
                     if (message.isMarkdown && message.processedContent) {
@@ -1414,10 +2074,244 @@
             }
         });
 
+        // 管理面板 API
+        const adminAPI = {
+            token() {
+                const raw = localStorage.getItem('lantalk_auth') || sessionStorage.getItem('lantalk_auth');
+                try { return raw ? JSON.parse(raw).token : null; } catch (e) { return null; }
+            },
+            origin() {
+                const raw = localStorage.getItem('lantalk_auth') || sessionStorage.getItem('lantalk_auth');
+                try { return raw ? JSON.parse(raw).origin : (location.protocol === 'file:' ? '' : location.origin); } catch (e) { return location.origin; }
+            },
+            async request(path, options = {}) {
+                const resp = await fetch(this.origin() + path, {
+                    ...options,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': 'Bearer ' + this.token()
+                    }
+                });
+                const data = await resp.json().catch(() => ({}));
+                if (!resp.ok) throw new Error(data.error || ('HTTP ' + resp.status));
+                return data;
+            },
+            refreshAll() {
+                this.loadStatus();
+                this.loadConfig();
+                this.loadRooms();
+                this.loadAccounts();
+                this.loadOnline();
+                this.loadMuted();
+            },
+            async loadStatus() {
+                try {
+                    const data = await fetch(this.origin() + '/api/health').then(r => r.json());
+                    document.getElementById('server-status').innerHTML = `
+                        <p>✅ 服务器运行正常</p>
+                        <p>在线用户: <strong>${data.users}</strong> | 房间: <strong>${data.rooms}</strong> | 被禁言IP: <strong>${data.mutedIPs}</strong></p>
+                        <p>服务器IP: <strong>${data.serverIP}</strong></p>`;
+                } catch (e) {
+                    document.getElementById('server-status').textContent = '❌ 无法连接服务器';
+                }
+            },
+            async loadConfig() {
+                try {
+                    const cfg = await this.request('/api/config');
+                    document.getElementById('current-port').textContent = cfg.port;
+                    document.getElementById('current-max-file').textContent = cfg.maxFileMB;
+                    document.getElementById('current-max-uploads').textContent = cfg.maxUploadsMB;
+                } catch (e) {}
+            },
+            async savePort() {
+                const p = document.getElementById('new-port').value.trim();
+                try {
+                    const r = await this.request('/api/config', { method: 'PUT', body: JSON.stringify({ port: p }) });
+                    alert('✅ ' + r.message);
+                    this.loadConfig();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async saveFileLimits() {
+                const body = {};
+                const mf = document.getElementById('new-max-file').value.trim();
+                const mu = document.getElementById('new-max-uploads').value.trim();
+                if (mf) body.maxFileMB = mf;
+                if (mu) body.maxUploadsMB = mu;
+                if (!Object.keys(body).length) return alert('请输入要修改的数值');
+                try {
+                    const r = await this.request('/api/config', { method: 'PUT', body: JSON.stringify(body) });
+                    alert('✅ ' + r.message);
+                    document.getElementById('new-max-file').value = '';
+                    document.getElementById('new-max-uploads').value = '';
+                    this.loadConfig();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async loadRooms() {
+                try {
+                    const rooms = await fetch(this.origin() + '/api/rooms').then(r => r.json());
+                    const el = document.getElementById('admin-rooms-list');
+                    el.innerHTML = rooms.map(r => `
+                        <div class="admin-item">
+                            <div><strong>${r.name}</strong> <span class="admin-meta">ID: ${r.id} | ${r.userCount}人</span></div>
+                            <div>
+                                ${r.id !== 'default' ? `<button class="danger" onclick="adminAPI.deleteRoom('${r.id}','${r.name}',${r.userCount})">删除</button>
+                                <button class="secondary" onclick="adminAPI.kickRoom('${r.id}','${r.name}')">踢出用户</button>` : '<span class="admin-meta">默认房间</span>'}
+                            </div>
+                        </div>`).join('') || '<div class="admin-meta">暂无房间</div>';
+                } catch (e) { document.getElementById('admin-rooms-list').textContent = '❌ ' + e.message; }
+            },
+            async createRoom() {
+                const roomId = document.getElementById('admin-room-id').value.trim();
+                const roomName = document.getElementById('admin-room-name').value.trim();
+                try {
+                    const r = await this.request('/api/rooms', { method: 'POST', body: JSON.stringify({ roomId, roomName }) });
+                    alert('✅ ' + r.message);
+                    this.loadRooms();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async deleteRoom(roomId, roomName, userCount) {
+                let force = false;
+                if (userCount > 0) {
+                    force = confirm(`房间 "${roomName}" 中有 ${userCount} 个用户，将强制删除并踢出他们，确定？`);
+                    if (!force) return;
+                } else if (!confirm(`确定删除房间 "${roomName}" ？`)) return;
+                try {
+                    const r = await this.request(`/api/rooms/${encodeURIComponent(roomId)}${force ? '?force=true' : ''}`, { method: 'DELETE' });
+                    alert('✅ ' + r.message);
+                    this.loadRooms();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async kickRoom(roomId, roomName) {
+                if (!confirm(`确定踢出房间 "${roomName}" 中的所有用户？`)) return;
+                try {
+                    const r = await this.request(`/api/rooms/${encodeURIComponent(roomId)}/kick-users`, { method: 'POST', body: '{}' });
+                    alert('✅ ' + r.message);
+                    this.loadRooms();
+                    this.loadOnline();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async loadAccounts() {
+                try {
+                    const accounts = await this.request('/api/accounts');
+                    const el = document.getElementById('admin-accounts-list');
+                    el.innerHTML = accounts.map(a => `
+                        <div class="admin-item">
+                            <div><strong>${a.username}</strong> <span class="admin-meta">${a.role === 'admin' ? '👑管理员' : '普通用户'} | 注册IP: ${a.registeredIp || '-'}</span></div>
+                            <div>
+                                <button class="secondary" onclick="adminAPI.renameUser('${a.username}')">改名</button>
+                                <button class="secondary" onclick="adminAPI.resetPassword('${a.username}')">重置密码</button>
+                                <button class="danger" onclick="adminAPI.deleteUser('${a.username}')">删除</button>
+                            </div>
+                        </div>`).join('');
+                } catch (e) { document.getElementById('admin-accounts-list').textContent = '❌ ' + e.message; }
+            },
+            async renameUser(username) {
+                const newUsername = prompt(`将 "${username}" 改名为：`, username);
+                if (!newUsername || newUsername === username) return;
+                try {
+                    const r = await this.request('/api/users/' + encodeURIComponent(username), { method: 'PUT', body: JSON.stringify({ newUsername }) });
+                    alert('✅ ' + r.message);
+                    this.loadAccounts();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async resetPassword(username) {
+                const newPassword = prompt(`为 "${username}" 设置新密码（至少6位）：`);
+                if (!newPassword) return;
+                try {
+                    const r = await this.request('/api/users/' + encodeURIComponent(username), { method: 'PUT', body: JSON.stringify({ newPassword }) });
+                    alert('✅ ' + r.message);
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async deleteUser(username) {
+                if (!confirm(`确定删除账号 "${username}" ？`)) return;
+                try {
+                    const r = await this.request('/api/users/' + encodeURIComponent(username), { method: 'DELETE' });
+                    alert('✅ ' + r.message);
+                    this.loadAccounts();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async loadOnline() {
+                try {
+                    const users = await this.request('/api/users');
+                    const el = document.getElementById('admin-online-list');
+                    el.innerHTML = users.length ? users.map(u => `
+                        <div class="admin-item">
+                            <div><strong>${u.username}</strong> <span class="admin-meta">IP: ${u.ip}${u.isMuted ? ' | <span class="muted-tag">已禁言</span>' : ''}</span></div>
+                            <div>
+                                <button class="danger" onclick="adminAPI.muteIPByIp('${u.ip}')" ${u.isMuted ? 'disabled' : ''}>禁言</button>
+                                <button class="success" onclick="adminAPI.unmuteIPByIp('${u.ip}')" ${!u.isMuted ? 'disabled' : ''}>解禁</button>
+                            </div>
+                        </div>`).join('') : '<div class="admin-meta">暂无在线用户</div>';
+                } catch (e) { document.getElementById('admin-online-list').textContent = '❌ ' + e.message; }
+            },
+            async loadMuted() {
+                try {
+                    const ips = await this.request('/api/muted-ips');
+                    const el = document.getElementById('admin-muted-list');
+                    el.innerHTML = ips.length ? ips.map(ip => `
+                        <div class="admin-item">
+                            <span>${ip}</span>
+                            <button class="success" onclick="adminAPI.unmuteIPByIp('${ip}')">解除禁言</button>
+                        </div>`).join('') : '<div class="admin-meta">暂无被禁言的IP</div>';
+                } catch (e) {}
+            },
+            async muteIP() {
+                const ip = document.getElementById('admin-ip-input').value.trim();
+                if (!ip) return alert('请输入IP地址');
+                try {
+                    const r = await this.request('/api/mute-ip', { method: 'POST', body: JSON.stringify({ ip }) });
+                    alert('✅ ' + r.message);
+                    this.loadMuted();
+                    this.loadOnline();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async unmuteIP() {
+                const ip = document.getElementById('admin-ip-input').value.trim();
+                if (!ip) return alert('请输入IP地址');
+                try {
+                    const r = await this.request('/api/unmute-ip', { method: 'POST', body: JSON.stringify({ ip }) });
+                    alert('✅ ' + r.message);
+                    this.loadMuted();
+                    this.loadOnline();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async muteIPByIp(ip) {
+                try {
+                    const r = await this.request('/api/mute-ip', { method: 'POST', body: JSON.stringify({ ip }) });
+                    alert('✅ ' + r.message);
+                    this.loadMuted();
+                    this.loadOnline();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async unmuteIPByIp(ip) {
+                try {
+                    const r = await this.request('/api/unmute-ip', { method: 'POST', body: JSON.stringify({ ip }) });
+                    alert('✅ ' + r.message);
+                    this.loadMuted();
+                    this.loadOnline();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async broadcast() {
+                const message = document.getElementById('admin-broadcast').value.trim();
+                if (!message) return alert('请输入广播内容');
+                try {
+                    const r = await this.request('/api/broadcast', { method: 'POST', body: JSON.stringify({ message }) });
+                    alert('✅ ' + r.message);
+                    document.getElementById('admin-broadcast').value = '';
+                } catch (e) { alert('❌ ' + e.message); }
+            }
+        };
+
         // 页面加载完成后启动应用
         document.addEventListener('DOMContentLoaded', () => {
-            console.log('DOM加载完成，启动支持多房间的聊天应用...');
+            console.log('DOM加载完成，启动聊天应用...');
             window.chatApp = new ChatApp();
+            // file:// 打开时显示服务器地址输入，否则隐藏
+            if (location.protocol !== 'file:') {
+                document.getElementById('server-row').style.display = 'none';
+            }
+            window.chatApp.updateNotifyBtn();
+            window.chatApp.tryAutoLogin();
         });
     </script>
 </body>

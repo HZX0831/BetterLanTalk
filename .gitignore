@@ -28,3 +28,12 @@ Thumbs.db
 # 临时文件
 tmp/
 temp/
+# 运行时数据（账号与端口配置）
+server/users.json
+server/config.json
+server/server.log
+server/server.err
+
+# 上传的文件
+server/uploads/
+server/files.json

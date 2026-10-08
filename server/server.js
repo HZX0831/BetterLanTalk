@@ -3,6 +3,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 // Markdown 处理模块
 const marked = require('marked');
@@ -99,6 +102,113 @@ function getLocalIP() {
 
 const app = express();
 const server = http.createServer(app);
+
+// ============ 配置与账号存储 ============
+const CONFIG_FILE = path.join(__dirname, 'config.json');
+const USERS_FILE = path.join(__dirname, 'users.json');
+const FILES_FILE = path.join(__dirname, 'files.json');
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+
+function loadJSON(file, def) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return def; }
+}
+function saveJSON(file, data) {
+    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+}
+
+let config = loadJSON(CONFIG_FILE, null) || {};
+if (!config.port || isNaN(config.port)) config.port = 3001;
+config.port = Number(config.port);
+if (!config.maxFileMB || isNaN(config.maxFileMB)) config.maxFileMB = 5120;   // 单文件上限 5GB
+if (!config.maxUploadsMB || isNaN(config.maxUploadsMB)) config.maxUploadsMB = 20480; // 上传目录总上限 20GB
+config.maxFileMB = Number(config.maxFileMB);
+config.maxUploadsMB = Number(config.maxUploadsMB);
+saveJSON(CONFIG_FILE, {
+    port: config.port,
+    maxFileMB: config.maxFileMB,
+    maxUploadsMB: config.maxUploadsMB
+});
+
+// 确保上传目录存在
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// 文件元数据：{ files: [{ storedName, name, size, mimeType, uploader, roomId, createdAt, expired }] }
+let fileStore = loadJSON(FILES_FILE, null) || { files: [] };
+if (!Array.isArray(fileStore.files)) fileStore.files = [];
+function saveFiles() { saveJSON(FILES_FILE, fileStore); }
+
+let userStore = loadJSON(USERS_FILE, null) || { users: [], tokens: {} };
+if (!Array.isArray(userStore.users)) userStore.users = [];
+if (typeof userStore.tokens !== 'object' || !userStore.tokens) userStore.tokens = {};
+
+function saveUsers() { saveJSON(USERS_FILE, userStore); }
+
+function hashPassword(password, salt) {
+    return crypto.scryptSync(password, salt, 64).toString('hex');
+}
+
+function addUser(username, password, role, registeredIp) {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const user = {
+        username,
+        salt,
+        passwordHash: hashPassword(password, salt),
+        role,
+        registeredIp: registeredIp || '',
+        createdAt: Date.now()
+    };
+    userStore.users.push(user);
+    saveUsers();
+    return user;
+}
+
+function createToken(username, role) {
+    const token = crypto.randomBytes(24).toString('hex');
+    userStore.tokens[token] = { username, role, expiresAt: Date.now() + 7 * 24 * 3600 * 1000 };
+    saveUsers();
+    return token;
+}
+
+function getUserByToken(token) {
+    if (!token) return null;
+    const t = userStore.tokens[token];
+    if (!t) return null;
+    if (t.expiresAt < Date.now()) {
+        delete userStore.tokens[token];
+        saveUsers();
+        return null;
+    }
+    return t;
+}
+
+function clientIpOf(req) {
+    return (req.socket && req.socket.remoteAddress || '').replace('::ffff:', '');
+}
+
+function authMiddleware(req, res, next) {
+    const h = req.headers.authorization || '';
+    const m = h.match(/^Bearer (.+)$/);
+    if (!m) return res.status(401).json({ error: '未登录' });
+    const u = getUserByToken(m[1]);
+    if (!u) return res.status(401).json({ error: '登录已过期，请重新登录' });
+    req.auth = u;
+    next();
+}
+
+function adminMiddleware(req, res, next) {
+    authMiddleware(req, res, () => {
+        if (req.auth.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
+        next();
+    });
+}
+
+// 初始化：确保存在管理员账号
+if (!userStore.users.some(u => u.role === 'admin')) {
+    addUser('admin', 'admin123', 'admin', '');
+    console.log('⚠️  已创建默认管理员账号 admin / admin123 ，请尽快登录修改密码');
+}
+saveUsers();
+
 const io = new Server(server, {  // ← io 在这里初始化
     cors: {
         origin: "*",
@@ -111,6 +221,98 @@ const rooms = new Map();
 const messages = new Map();
 const mutedIPs = new Set();
 const localIP = getLocalIP();
+
+// 离开提示延迟（毫秒）：页面刷新时可被下一次 join 取消，避免刷屏
+const LEAVE_DELAY = 8000;
+const pendingLeaves = new Map(); // username -> { timer, roomId }
+
+function broadcastUserJoined(socket, roomId, username, reason) {
+    socket.to(roomId).emit('user_joined', { username, room: roomId, reason });
+}
+
+function scheduleUserLeft(roomId, username) {
+    // 取消同名的待广播离开
+    const existing = pendingLeaves.get(username);
+    if (existing) clearTimeout(existing.timer);
+
+    const timer = setTimeout(() => {
+        pendingLeaves.delete(username);
+        // 若期间用户又回来了（有在线 socket），则不广播离开
+        const stillOnline = Array.from(users.values()).some(u => u.username === username);
+        if (stillOnline) return;
+        io.to(roomId).emit('user_left', { username, room: roomId, reason: 'leave' });
+        console.log(`用户 ${username} 离开房间 ${roomId}（延迟提示）`);
+    }, LEAVE_DELAY);
+
+    pendingLeaves.set(username, { timer, roomId });
+}
+
+function cancelPendingLeave(username) {
+    const existing = pendingLeaves.get(username);
+    if (existing) {
+        clearTimeout(existing.timer);
+        pendingLeaves.delete(username);
+        return true; // 说明这是一次"刷新/重连"，跳过加入提示
+    }
+    return false;
+}
+
+// ============ 文件存储辅助函数 ============
+function sanitizeFilename(name) {
+    let base = path.basename(String(name || 'file')).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim();
+    if (!base || base === '.' || base === '..') base = 'file';
+    if (base.length > 100) {
+        const ext = path.extname(base).slice(0, 10);
+        base = base.slice(0, 90) + ext;
+    }
+    return base;
+}
+
+function getUploadsTotalSize() {
+    let total = 0;
+    fileStore.files.forEach(f => { if (!f.expired && f.size) total += f.size; });
+    return total;
+}
+
+// 按时间从旧到新清理，直到总量 <= 上限；被清理的文件标记为已过期
+function cleanupUploads() {
+    const limitBytes = config.maxUploadsMB * 1024 * 1024;
+    if (getUploadsTotalSize() <= limitBytes) return [];
+
+    const removed = [];
+    const active = fileStore.files.filter(f => !f.expired).sort((a, b) => a.createdAt - b.createdAt);
+    for (const f of active) {
+        if (getUploadsTotalSize() <= limitBytes) break;
+        const filePath = path.join(UPLOADS_DIR, f.storedName);
+        try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch (e) { console.error('删除文件失败:', e.message); }
+        f.expired = true;
+        removed.push(f);
+        console.log(`🧹 因空间限制清理文件: ${f.name} (${f.storedName})`);
+    }
+    if (removed.length) {
+        saveFiles();
+        // 向文件所在房间广播过期通知
+        removed.forEach(f => {
+            if (f.roomId && rooms.has(f.roomId)) {
+                const msg = {
+                    id: generateId(),
+                    type: 'admin',
+                    username: '系统',
+                    content: `⚠️ 文件 "${f.name}" 因存储空间限制已过期，无法再下载`,
+                    timestamp: Date.now(),
+                    room: f.roomId
+                };
+                messages.get(f.roomId)?.push(msg);
+                io.to(f.roomId).emit('message', msg);
+                io.to(f.roomId).emit('file_expired', { storedName: f.storedName });
+            }
+        });
+    }
+    return removed;
+}
+
+// 启动时执行一次清理
+cleanupUploads();
 
 // 房间管理函数
 function createRoom(roomId, roomName = null) {
@@ -160,7 +362,7 @@ function updateUserList(roomId) {
 app.use(cors());
 app.use(express.json());
 app.use('/client', express.static('../client'));
-app.use('/admin', express.static('../admin'));
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // 创建默认房间
 rooms.set('default', {
@@ -174,12 +376,24 @@ messages.set('default', []);
 
 // API路由
 app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, '../client/index.html'));
+});
+
+app.get('/chat', (req, res) => {
+    res.redirect('/');
+});
+
+app.get('/admin', (req, res) => {
+    res.redirect('/');
+});
+
+app.get('/api/status', (req, res) => {
     res.json({
         name: '内网聊天室服务器',
-        version: '1.2.0',
+        version: '2.1.0',
         status: 'running',
         serverIP: localIP,
-        port: 3001,
+        port: PORT,
         timestamp: new Date().toISOString()
     });
 });
@@ -195,7 +409,7 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-app.get('/api/users', (req, res) => {
+app.get('/api/users', adminMiddleware, (req, res) => {
     const userList = Array.from(users.values()).map(user => ({
         id: user.id,
         username: user.username,
@@ -206,7 +420,7 @@ app.get('/api/users', (req, res) => {
     res.json(userList);
 });
 
-app.post('/api/mute-ip', (req, res) => {
+app.post('/api/mute-ip', adminMiddleware, (req, res) => {
     const { ip } = req.body;
     if (!ip) return res.status(400).json({ error: 'IP地址不能为空' });
 
@@ -219,7 +433,7 @@ app.post('/api/mute-ip', (req, res) => {
     res.json({ success: true, message: `IP ${ip} 已被禁言` });
 });
 
-app.post('/api/unmute-ip', (req, res) => {
+app.post('/api/unmute-ip', adminMiddleware, (req, res) => {
     const { ip } = req.body;
     if (!ip) return res.status(400).json({ error: 'IP地址不能为空' });
 
@@ -232,11 +446,291 @@ app.post('/api/unmute-ip', (req, res) => {
     res.json({ success: true, message: `IP ${ip} 已解除禁言` });
 });
 
-app.get('/api/muted-ips', (req, res) => {
+// ============ 账号相关 API ============
+app.post('/api/register', (req, res) => {
+    const { username, password } = req.body;
+    if (!username || username.length < 2 || username.length > 20) {
+        return res.status(400).json({ error: '用户名长度应为2-20个字符' });
+    }
+    if (!password || password.length < 6) {
+        return res.status(400).json({ error: '密码长度至少6位' });
+    }
+    if (userStore.users.some(u => u.username === username)) {
+        return res.status(400).json({ error: '用户名已存在' });
+    }
+    const ip = clientIpOf(req);
+    if (ip && userStore.users.some(u => u.registeredIp && u.registeredIp === ip)) {
+        return res.status(403).json({ error: '该IP已注册过账号，每个IP仅限注册一个用户' });
+    }
+    addUser(username, password, 'user', ip);
+    const token = createToken(username, 'user');
+    console.log(`新用户注册: ${username} (IP: ${ip})`);
+    res.json({ success: true, token, username, role: 'user' });
+});
+
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+        return res.status(400).json({ error: '用户名和密码不能为空' });
+    }
+    const user = userStore.users.find(u => u.username === username);
+    if (!user || user.passwordHash !== hashPassword(password, user.salt)) {
+        return res.status(401).json({ error: '用户名或密码错误' });
+    }
+    const token = createToken(user.username, user.role);
+    console.log(`用户登录: ${user.username} (${user.role})`);
+    res.json({ success: true, token, username: user.username, role: user.role });
+});
+
+app.get('/api/me', authMiddleware, (req, res) => {
+    const user = userStore.users.find(u => u.username === req.auth.username);
+    res.json({ username: req.auth.username, role: user ? user.role : req.auth.role });
+});
+
+app.post('/api/logout', authMiddleware, (req, res) => {
+    const h = req.headers.authorization || '';
+    const token = h.replace(/^Bearer /, '');
+    delete userStore.tokens[token];
+    saveUsers();
+    res.json({ success: true });
+});
+
+// 账号管理（仅管理员）
+app.get('/api/accounts', adminMiddleware, (req, res) => {
+    res.json(userStore.users.map(u => ({
+        username: u.username,
+        role: u.role,
+        registeredIp: u.registeredIp,
+        createdAt: u.createdAt
+    })));
+});
+
+app.put('/api/users/:username', adminMiddleware, (req, res) => {
+    const user = userStore.users.find(u => u.username === req.params.username);
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+
+    const { newUsername, newPassword } = req.body;
+    if (newUsername !== undefined) {
+        if (newUsername.length < 2 || newUsername.length > 20) {
+            return res.status(400).json({ error: '用户名长度应为2-20个字符' });
+        }
+        if (userStore.users.some(u => u.username === newUsername)) {
+            return res.status(400).json({ error: '新用户名已被占用' });
+        }
+        Object.values(userStore.tokens).forEach(t => {
+            if (t.username === user.username) t.username = newUsername;
+        });
+        user.username = newUsername;
+    }
+    if (newPassword !== undefined && newPassword !== '') {
+        if (newPassword.length < 6) {
+            return res.status(400).json({ error: '密码长度至少6位' });
+        }
+        user.salt = crypto.randomBytes(16).toString('hex');
+        user.passwordHash = hashPassword(newPassword, user.salt);
+    }
+    saveUsers();
+    console.log(`管理员修改账号: ${req.params.username} -> ${user.username}`);
+    res.json({ success: true, message: '修改成功', user: { username: user.username, role: user.role } });
+});
+
+app.delete('/api/users/:username', adminMiddleware, (req, res) => {
+    const user = userStore.users.find(u => u.username === req.params.username);
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    if (user.username === req.auth.username) {
+        return res.status(400).json({ error: '不能删除当前登录的账号' });
+    }
+    userStore.users = userStore.users.filter(u => u.username !== user.username);
+    Object.keys(userStore.tokens).forEach(t => {
+        if (userStore.tokens[t].username === user.username) delete userStore.tokens[t];
+    });
+    saveUsers();
+    console.log(`管理员删除账号: ${user.username}`);
+    res.json({ success: true, message: `用户 ${user.username} 已删除` });
+});
+
+// 服务器配置
+app.get('/api/config', adminMiddleware, (req, res) => {
+    res.json({ port: config.port, maxFileMB: config.maxFileMB, maxUploadsMB: config.maxUploadsMB, localIP });
+});
+
+// 公开的文件限制（供客户端上传前预校验）
+app.get('/api/limits', (req, res) => {
+    res.json({ maxFileMB: config.maxFileMB, maxUploadsMB: config.maxUploadsMB });
+});
+
+// 房间文件列表（右侧栏）
+app.get('/api/files', authMiddleware, (req, res) => {
+    const roomId = String(req.query.room || 'default');
+    const list = fileStore.files
+        .filter(f => f.roomId === roomId)
+        .sort((a, b) => b.createdAt - a.createdAt)
+        .map(f => ({
+            storedName: f.storedName,
+            name: f.name,
+            size: f.size,
+            mimeType: f.mimeType,
+            uploader: f.uploader,
+            createdAt: f.createdAt,
+            expired: !!f.expired,
+            url: `/uploads/${encodeURIComponent(f.storedName)}`
+        }));
+    res.json(list);
+});
+
+app.put('/api/config', adminMiddleware, (req, res) => {
+    const { port, maxFileMB, maxUploadsMB } = req.body;
+    const updated = [];
+
+    if (port !== undefined) {
+        const p = Number(port);
+        if (!p || isNaN(p) || p < 1 || p > 65535) {
+            return res.status(400).json({ error: '端口号应为1-65535之间的数字' });
+        }
+        config.port = p;
+        updated.push(`端口 ${p}（重启生效）`);
+    }
+    if (maxFileMB !== undefined) {
+        const m = Number(maxFileMB);
+        if (!m || isNaN(m) || m <= 0) {
+            return res.status(400).json({ error: '单文件上限应为正整数(MB)' });
+        }
+        config.maxFileMB = m;
+        updated.push(`单文件上限 ${m}MB`);
+    }
+    if (maxUploadsMB !== undefined) {
+        const m = Number(maxUploadsMB);
+        if (!m || isNaN(m) || m <= 0) {
+            return res.status(400).json({ error: '上传目录总上限应为正整数(MB)' });
+        }
+        config.maxUploadsMB = m;
+        updated.push(`上传目录总上限 ${m}MB`);
+    }
+    if (config.maxFileMB > config.maxUploadsMB) {
+        return res.status(400).json({ error: '单文件上限不能大于上传目录总上限' });
+    }
+
+    saveJSON(CONFIG_FILE, {
+        port: config.port,
+        maxFileMB: config.maxFileMB,
+        maxUploadsMB: config.maxUploadsMB
+    });
+    // 修改上限后立即按新上限清理一次
+    cleanupUploads();
+    res.json({
+        success: true,
+        message: updated.length ? '已更新: ' + updated.join('、') : '无改动',
+        port: config.port,
+        maxFileMB: config.maxFileMB,
+        maxUploadsMB: config.maxUploadsMB
+    });
+});
+
+// ============ 文件上传 API ============
+app.post('/api/upload', authMiddleware, (req, res) => {
+    const token = req.headers.authorization.replace(/^Bearer /, '');
+    const ip = clientIpOf(req);
+
+    // 被禁言的 IP 不允许上传
+    if (mutedIPs.has(ip)) {
+        return res.status(403).json({ error: '你的IP已被禁言，无法上传文件' });
+    }
+
+    const roomId = String(req.query.room || req.headers['x-room'] || 'default');
+    if (!rooms.has(roomId)) {
+        return res.status(400).json({ error: '目标房间不存在' });
+    }
+
+    let originalName = 'file';
+    try { originalName = decodeURIComponent(String(req.headers['x-filename'] || 'file')); } catch (e) {}
+    const safeName = sanitizeFilename(originalName);
+    const mimeType = String(req.headers['x-mime'] || req.headers['content-type'] || 'application/octet-stream');
+    const maxFileBytes = config.maxFileMB * 1024 * 1024;
+
+    const storedName = `${Date.now()}-${crypto.randomBytes(6).toString('hex')}-${safeName}`;
+    const filePath = path.join(UPLOADS_DIR, storedName);
+    const writeStream = fs.createWriteStream(filePath);
+
+    // 预检 Content-Length，超限直接拒绝（避免读取超大请求体）
+    const declaredLength = Number(req.headers['content-length'] || 0);
+    if (declaredLength && declaredLength > maxFileBytes) {
+        res.set('Connection', 'close');
+        res.status(413).json({ error: `文件超过单文件上限 ${config.maxFileMB}MB` });
+        res.on('finish', () => req.destroy());
+        return;
+    }
+
+    let received = 0;
+    let aborted = false;
+
+    const abortUpload = (status, message) => {
+        if (aborted) return;
+        aborted = true;
+        req.unpipe(writeStream);
+        writeStream.destroy();
+        fs.unlink(filePath, () => {});
+        if (!res.headersSent) {
+            res.set('Connection', 'close');
+            res.status(status).json({ error: message });
+            res.on('finish', () => req.destroy());
+        }
+    };
+
+    req.on('data', (chunk) => {
+        received += chunk.length;
+        if (received > maxFileBytes) {
+            abortUpload(413, `文件超过单文件上限 ${config.maxFileMB}MB`);
+        }
+    });
+
+    writeStream.on('error', (err) => {
+        console.error('文件写入失败:', err.message);
+        abortUpload(500, '文件写入失败');
+    });
+
+    writeStream.on('finish', () => {
+        if (aborted) return;
+        if (received === 0) {
+            fs.unlink(filePath, () => {});
+            return res.status(400).json({ error: '空文件' });
+        }
+
+        const record = {
+            storedName,
+            name: safeName,
+            size: received,
+            mimeType,
+            uploader: req.auth.username,
+            roomId,
+            createdAt: Date.now(),
+            expired: false
+        };
+        fileStore.files.push(record);
+        saveFiles();
+        cleanupUploads();
+
+        console.log(`📎 文件上传: ${safeName} (${(received / 1048576).toFixed(2)}MB) by ${req.auth.username} -> ${roomId}`);
+        res.json({
+            success: true,
+            file: {
+                storedName,
+                name: safeName,
+                size: received,
+                mimeType,
+                url: `/uploads/${encodeURIComponent(storedName)}`,
+                roomId
+            }
+        });
+    });
+
+    req.pipe(writeStream);
+});
+
+app.get('/api/muted-ips', authMiddleware, (req, res) => {
     res.json(Array.from(mutedIPs));
 });
 
-app.post('/api/broadcast', (req, res) => {
+app.post('/api/broadcast', adminMiddleware, (req, res) => {
     const { message } = req.body;
     if (!message) return res.status(400).json({ error: '消息不能为空' });
 
@@ -256,53 +750,28 @@ app.post('/api/broadcast', (req, res) => {
     res.json({ success: true, message: '广播发送成功' });
 });
 // 创建房间API
-app.post('/api/rooms', (req, res) => {
-    const { roomId, roomName, adminToken } = req.body; // 可以添加管理员令牌绕过检查
-    
-    console.log('API创建房间请求:', roomId, 'adminToken:', adminToken);
-    
+app.post('/api/rooms', adminMiddleware, (req, res) => {
+    const { roomId, roomName } = req.body;
+
+    console.log('API创建房间请求:', roomId, 'by', req.auth.username);
+
     if (!roomId) {
         return res.status(400).json({ error: '房间ID不能为空' });
     }
-    
+
     if (roomId.length < 2 || roomId.length > 20) {
         return res.status(400).json({ error: '房间ID长度应为2-20个字符' });
     }
-    
+
     // 检查房间是否已存在
     if (rooms.has(roomId)) {
         return res.status(400).json({ error: '房间已存在' });
     }
-    
-    // 如果是管理员操作（通过管理面板），允许创建房间
-    const isAdminRequest = adminToken === 'admin123'; // 简单的管理员令牌验证
-    
-    if (!isAdminRequest) {
-        // 检查请求IP是否被禁言
-        const clientIP = req.ip || req.connection.remoteAddress;
-        console.log('客户端IP:', clientIP, '禁言列表:', Array.from(mutedIPs));
-        
-        if (mutedIPs.has(clientIP)) {
-            return res.status(403).json({ error: '你的IP已被禁言，无法创建房间' });
-        }
-        
-        // 还可以检查用户是否在线并被禁言
-        let isUserMuted = false;
-        users.forEach(user => {
-            if (user.ip === clientIP && user.isMuted) {
-                isUserMuted = true;
-            }
-        });
-        
-        if (isUserMuted) {
-            return res.status(403).json({ error: '你已被禁言，无法创建房间' });
-        }
-    }
-    
+
     // 创建新房间
     const room = createRoom(roomId, roomName || roomId);
     
-    console.log(`通过API创建房间: ${room.name} (${roomId}) ${isAdminRequest ? '[管理员操作]' : ''}`);
+    console.log(`通过API创建房间: ${room.name} (${roomId}) by ${req.auth.username}`);
     
     // 广播房间列表更新
     broadcastRoomList();
@@ -320,7 +789,7 @@ app.post('/api/rooms', (req, res) => {
 });
 
 // 删除房间API
-app.delete('/api/rooms/:roomId', (req, res) => {
+app.delete('/api/rooms/:roomId', adminMiddleware, (req, res) => {
     const { roomId } = req.params;
     const { force = false } = req.query;
     
@@ -383,10 +852,10 @@ app.delete('/api/rooms/:roomId', (req, res) => {
                 // 发送默认房间的历史消息
                 userSocket.emit('message_history', (messages.get('default') || []).slice(-50));
                 
-                // 发送加入默认房间的消息
+                // 发送加入默认房间的消息（系统操作提示，大消息框）
                 const joinMessage = {
                     id: generateId(),
-                    type: 'join',
+                    type: 'admin',
                     username: '系统',
                     content: `${user.username} 被移入默认房间`,
                     timestamp: Date.now(),
@@ -421,7 +890,7 @@ app.delete('/api/rooms/:roomId', (req, res) => {
 });
 
 // 添加踢出用户API
-app.post('/api/rooms/:roomId/kick-users', (req, res) => {
+app.post('/api/rooms/:roomId/kick-users', adminMiddleware, (req, res) => {
     const { roomId } = req.params;
     
     if (!roomId) {
@@ -609,20 +1078,12 @@ io.on('connection', (socket) => {
         // 离开当前房间
         if (user.currentRoom) {
             socket.leave(user.currentRoom);
-            
-            // 发送离开消息
-            const leaveMessage = {
-                id: generateId(),
-                type: 'leave',
-                username: '系统',
-                content: `${user.username} 离开了房间`,
-                timestamp: Date.now(),
+            // 向右上角提示（不写入历史）
+            socket.to(user.currentRoom).emit('user_left', {
+                username: user.username,
                 room: user.currentRoom,
-                userIP: user.ip
-            };
-            
-            messages.get(user.currentRoom)?.push(leaveMessage);
-            socket.to(user.currentRoom).emit('message', leaveMessage);
+                reason: 'switch'
+            });
         }
         
         // 加入新房间
@@ -636,20 +1097,12 @@ io.on('connection', (socket) => {
             room.users.push(user);
         }
         
-        // 发送加入消息
-        const joinMessage = {
-            id: generateId(),
-            type: 'join',
-            username: '系统',
-            content: `${user.username} 加入了房间`,
-            timestamp: Date.now(),
+        // 向右上角提示（不写入历史）
+        socket.to(roomId).emit('user_joined', {
+            username: user.username,
             room: roomId,
-            userIP: user.ip
-        };
-        
-        messages.get(roomId)?.push(joinMessage);
-        socket.emit('message', joinMessage);
-        socket.to(roomId).emit('message', joinMessage);
+            reason: 'switch'
+        });
         
         // 发送新房间的历史消息
         socket.emit('message_history', (messages.get(roomId) || []).slice(-50));
@@ -668,13 +1121,16 @@ io.on('connection', (socket) => {
     });
 
     socket.on('join', (data) => {
-        const { username, roomId = 'default' } = data;
-        
-        if (!username || username.length < 2 || username.length > 20) {
-            socket.emit('error', '用户名长度应为2-20个字符');
+        const { token, roomId = 'default' } = data;
+
+        const auth = getUserByToken(token);
+        if (!auth) {
+            socket.emit('error', '登录已过期，请重新登录');
             return;
         }
-        
+        const account = userStore.users.find(u => u.username === auth.username);
+        const username = account ? account.username : auth.username;
+
         const isIPMuted = mutedIPs.has(clientIP);
         const user = {
             id: generateId(),
@@ -697,18 +1153,9 @@ io.on('connection', (socket) => {
         if (!room.users.find(u => u.socketId === socket.id)) {
             room.users.push(user);
         }
-        
-        const joinMessage = {
-            id: generateId(),
-            type: 'join',
-            username: '系统',
-            content: `${username} (IP: ${clientIP}) 加入了聊天室${isIPMuted ? ' [已被禁言]' : ''}`,
-            timestamp: Date.now(),
-            room: roomId,
-            userIP: clientIP
-        };
-        
-        messages.get(roomId)?.push(joinMessage);
+
+        // 若此前有待广播的离开（页面刷新场景），取消它并跳过本次加入提示
+        const wasRefresh = cancelPendingLeave(username);
         
         // 如果被禁言，发送提示消息
         if (isIPMuted) {
@@ -721,14 +1168,15 @@ io.on('connection', (socket) => {
             });
         }
         
-        socket.emit('message', joinMessage);
         socket.emit('message_history', (messages.get(roomId) || []).slice(-50));
-        socket.to(roomId).emit('message', joinMessage);
+        if (!wasRefresh) {
+            broadcastUserJoined(socket, roomId, username, 'join');
+        }
         
         updateUserList(roomId);
         broadcastRoomList();
         
-        console.log(`用户 ${username} (IP: ${clientIP}) 加入房间 ${roomId} ${isIPMuted ? '[禁言状态]' : ''}`);
+        console.log(`用户 ${username} (IP: ${clientIP}) 加入房间 ${roomId} ${isIPMuted ? '[禁言状态]' : ''}${wasRefresh ? ' [刷新重连，静默]' : ''}`);
     });
 
     socket.on('send_message', (data) => {
@@ -770,6 +1218,58 @@ io.on('connection', (socket) => {
         console.log(`消息 [${roomId}]: ${user.username} (IP: ${user.ip}): ${content}`);
     });
 
+    // 文件消息：客户端上传成功后通知服务器广播
+    socket.on('send_file', (data) => {
+        const { storedName, roomId = 'default' } = data || {};
+        const user = users.get(socket.id);
+
+        if (!user) {
+            socket.emit('error', '请先加入聊天室');
+            return;
+        }
+        if (user.isMuted) {
+            socket.emit('error', '你已被禁言，无法发送文件');
+            return;
+        }
+        if (!storedName || !rooms.has(roomId)) {
+            socket.emit('error', '文件消息无效');
+            return;
+        }
+
+        const record = fileStore.files.find(f => f.storedName === storedName);
+        if (!record) {
+            socket.emit('error', '文件不存在或已过期');
+            return;
+        }
+        if (record.expired) {
+            socket.emit('error', '文件已过期');
+            return;
+        }
+        record.roomId = roomId;
+
+        const message = {
+            id: generateId(),
+            type: 'file',
+            username: user.username,
+            name: record.name,
+            size: record.size,
+            mimeType: record.mimeType,
+            fileUrl: `/uploads/${encodeURIComponent(record.storedName)}`,
+            storedName: record.storedName,
+            isImage: String(record.mimeType || '').startsWith('image/'),
+            timestamp: Date.now(),
+            room: roomId,
+            userIP: user.ip
+        };
+
+        const roomMessages = messages.get(roomId) || [];
+        roomMessages.push(message);
+        io.to(roomId).emit('message', message);
+        saveFiles();
+
+        console.log(`文件消息 [${roomId}]: ${record.name} by ${user.username}`);
+    });
+
     socket.on('typing', (data) => {
         const { isTyping, roomId = 'default' } = data;
         const user = users.get(socket.id);
@@ -789,47 +1289,38 @@ io.on('connection', (socket) => {
     socket.on('disconnect', () => {
         const user = users.get(socket.id);
         if (user) {
+            const leaveRoom = user.currentRoom;
             // 从所有房间移除用户
             rooms.forEach((room, roomId) => {
                 const userIndex = room.users.findIndex(u => u.socketId === socket.id);
                 if (userIndex > -1) {
                     room.users.splice(userIndex, 1);
-                    
-                    // 只在用户当前房间发送离开消息
-                    if (roomId === user.currentRoom) {
-                        const leaveMessage = {
-                            id: generateId(),
-                            type: 'leave',
-                            username: '系统',
-                            content: `${user.username} (IP: ${user.ip}) 离开了聊天室`,
-                            timestamp: Date.now(),
-                            room: roomId,
-                            userIP: user.ip
-                        };
-                        
-                        messages.get(roomId)?.push(leaveMessage);
-                        socket.to(roomId).emit('message', leaveMessage);
-                        updateUserList(roomId);
-                    }
+                    if (roomId === leaveRoom) updateUserList(roomId);
                 }
             });
-            
+
             users.delete(socket.id);
             broadcastRoomList();
+
+            // 若该账号已无其他在线连接，则延迟广播离开（可被刷新重连取消）
+            const stillOnline = Array.from(users.values()).some(u => u.username === user.username);
+            if (!stillOnline && leaveRoom && rooms.has(leaveRoom)) {
+                scheduleUserLeft(leaveRoom, user.username);
+            }
+
             console.log(`用户断开连接: ${user.username} (IP: ${user.ip})`);
         }
     });
 });
 // 启动服务器
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || config.port || 3001;
 server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
-    console.log('🚀 内网聊天室服务器已启动 v1.2.1');
+    console.log('🚀 内网聊天室服务器已启动 v2.1.0');
     console.log(`📍 本地访问: http://localhost:${PORT}`);
     console.log(`🌐 内网访问: http://${localIP}:${PORT}`);
-    console.log(`💬 聊天室: http://${localIP}:${PORT}/client/index.html`);
-    console.log(`🛡️  管理面板: http://${localIP}:${PORT}/admin/admin.html`);
-    console.log('📝 新功能: 支持多房间和Markdown');
+    console.log(`💬 聊天室: http://${localIP}:${PORT}/`);
+    console.log(`📎 文件传输: 单文件上限 ${config.maxFileMB}MB / 目录总量 ${config.maxUploadsMB}MB（管理面板可调）`);
     console.log('================================');
     console.log('按 Ctrl+C 停止服务器');
 });

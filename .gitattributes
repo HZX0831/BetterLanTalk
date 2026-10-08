@@ -1,0 +1,9 @@
+# 统一换行符，避免跨平台问题
+* text=auto
+
+# Shell 脚本必须使用 LF
+*.sh text eol=lf
+
+# Windows 批处理使用 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
