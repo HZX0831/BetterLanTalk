@@ -56,6 +56,7 @@ const server = http.createServer(app);
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const USERS_FILE = path.join(__dirname, 'users.json');
 const FILES_FILE = path.join(__dirname, 'files.json');
+const ROOMS_FILE = path.join(__dirname, 'rooms.json');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 function loadJSON(file, def) {
@@ -129,34 +130,52 @@ function getUserByToken(token) {
         saveUsers();
         return null;
     }
-    return t;
+    const account = userStore.users.find(u => u.username === t.username);
+    if (!account) return null;
+    return { username: account.username, role: account.role };
 }
 
 function clientIpOf(req) {
     return (req.socket && req.socket.remoteAddress || '').replace('::ffff:', '');
 }
 
+function requestToken(req) {
+    const match = (req.headers.authorization || '').match(/^Bearer (.+)$/);
+    if (match) return match[1];
+    const cookie = (req.headers.cookie || '').split(';').find(part => part.trim().startsWith('lantalk_session='));
+    return cookie ? cookie.trim().slice('lantalk_session='.length) : null;
+}
+function sessionCookie(req, res, token) {
+    res.cookie('lantalk_session', token, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: 7 * 24 * 3600 * 1000 });
+}
 function authMiddleware(req, res, next) {
-    const h = req.headers.authorization || '';
-    const m = h.match(/^Bearer (.+)$/);
-    if (!m) return res.status(401).json({ error: '未登录' });
-    const u = getUserByToken(m[1]);
-    if (!u) return res.status(401).json({ error: '登录已过期，请重新登录' });
-    req.auth = u;
+    const token = requestToken(req);
+    const auth = getUserByToken(token);
+    if (!auth) return res.status(401).json({ error: '未登录或登录已过期' });
+    req.auth = auth;
+    req.authToken = token;
     next();
 }
-
+function isAdmin(account) { return account && ['admin', 'superadmin'].includes(account.role); }
 function adminMiddleware(req, res, next) {
     authMiddleware(req, res, () => {
-        if (req.auth.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
+        if (!isAdmin(req.auth)) return res.status(403).json({ error: '需要管理员权限' });
         next();
     });
 }
-
-// 初始化：确保存在管理员账号
-if (!userStore.users.some(u => u.role === 'admin')) {
-    addUser('admin', 'admin123', 'admin', '');
-    console.log('⚠️  已创建默认管理员账号 admin / admin123 ，请尽快登录修改密码');
+function superadminMiddleware(req, res, next) {
+    authMiddleware(req, res, () => {
+        if (req.auth.role !== 'superadmin') return res.status(403).json({ error: '需要超级管理员权限' });
+        next();
+    });
+}
+// Preserve existing accounts and passwords; promote the initial administrator once.
+if (!userStore.users.length) {
+    addUser('admin', 'admin123', 'superadmin', '');
+    console.log('已创建初始超级管理员 admin / admin123，请登录后修改密码');
+} else if (!userStore.users.some(u => u.role === 'superadmin')) {
+    const initial = userStore.users.find(u => u.role === 'admin') || userStore.users[0];
+    initial.role = 'superadmin';
 }
 saveUsers();
 
@@ -176,10 +195,12 @@ let localIP = (config.serverIP && config.serverIP.trim()) || getLocalIP();
 
 // 离开提示延迟（毫秒）：页面刷新时可被下一次 join 取消，避免刷屏
 const LEAVE_DELAY = 8000;
+function roomChannel(roomId) { return 'chat-room:' + roomId; }
+
 const pendingLeaves = new Map(); // username -> { timer, roomId }
 
 function broadcastUserJoined(socket, roomId, username, reason) {
-    socket.to(roomId).emit('user_joined', { username, room: roomId, reason });
+    socket.to(roomChannel(roomId)).emit('user_joined', { username, room: roomId, reason });
 }
 
 function scheduleUserLeft(roomId, username) {
@@ -192,7 +213,7 @@ function scheduleUserLeft(roomId, username) {
         // 若期间用户又回来了（有在线 socket），则不广播离开
         const stillOnline = Array.from(users.values()).some(u => u.username === username);
         if (stillOnline) return;
-        io.to(roomId).emit('user_left', { username, room: roomId, reason: 'leave' });
+        io.to(roomChannel(roomId)).emit('user_left', { username, room: roomId, reason: 'leave' });
         console.log(`用户 ${username} 离开房间 ${roomId}（延迟提示）`);
     }, LEAVE_DELAY);
 
@@ -255,8 +276,8 @@ function cleanupUploads() {
                     room: f.roomId
                 };
                 messages.get(f.roomId)?.push(msg);
-                io.to(f.roomId).emit('message', msg);
-                io.to(f.roomId).emit('file_expired', { storedName: f.storedName });
+                io.to(roomChannel(f.roomId)).emit('message', msg);
+                io.to(roomChannel(f.roomId)).emit('file_expired', { storedName: f.storedName });
             }
         });
     }
@@ -266,48 +287,86 @@ function cleanupUploads() {
 // 启动时执行一次清理
 cleanupUploads();
 
-// 房间管理函数
-function createRoom(roomId, roomName = null) {
-    if (!rooms.has(roomId)) {
-        const room = {
-            id: roomId,
-            name: roomName || roomId,
-            users: [],
-            created: Date.now(),
-            isPublic: true
-        };
-        rooms.set(roomId, room);
-        messages.set(roomId, []);
-        console.log(`创建新房间: ${roomName || roomId}`);
-        return room;
+// Room membership is independent of which room the user is currently viewing.
+function saveRooms() {
+    saveJSON(ROOMS_FILE, { rooms: Array.from(rooms.values()).map(({ users, ...room }) => room) });
+}
+function canAccessRoom(account, room) {
+    return !!account && !!room && (room.isPublic || room.members.includes(account.username));
+}
+function canManageRoom(account, room) {
+    return isAdmin(account) && !!room && (account.role === 'superadmin' || room.createdBy === account.username);
+}
+function roomInfo(room, account) {
+    return { id: room.id, name: room.name, isPublic: room.isPublic, createdBy: room.createdBy,
+        created: room.created, userCount: new Set(room.users.map(u => u.username)).size,
+        canManage: canManageRoom(account, room),
+        ...(canManageRoom(account, room) ? { members: room.members } : {}) };
+}
+function visibleRooms(account, managing = false) {
+    return Array.from(rooms.values()).filter(room => managing ? canManageRoom(account, room) : canAccessRoom(account, room)).map(room => roomInfo(room, account));
+}
+function socketUser(socket) {
+    const user = users.get(socket.id);
+    const account = getUserByToken(socket.data.token);
+    if (!user || !account) return null;
+    user.username = account.username;
+    user.role = account.role;
+    return user;
+}
+function syncRoomSubscriptions() {
+    for (const socket of io.sockets.sockets.values()) {
+        const user = socketUser(socket);
+        if (!user) continue;
+        for (const room of rooms.values()) {
+            room.users = room.users.filter(u => u.socketId !== socket.id);
+            if (canAccessRoom(user, room)) {
+                socket.join(roomChannel(room.id));
+                room.users.push(user);
+            } else socket.leave(roomChannel(room.id));
+        }
     }
-    return rooms.get(roomId);
+    for (const room of rooms.values()) updateUserList(room.id);
+    broadcastRoomList();
 }
-
-// 广播房间列表给所有客户端
+function createRoom(roomId, roomName, isPublic = true, createdBy = '') {
+    const room = { id: roomId, name: roomName || roomId, isPublic, createdBy,
+        members: isPublic ? [] : [createdBy], users: [], created: Date.now() };
+    rooms.set(roomId, room);
+    messages.set(roomId, []);
+    saveRooms();
+    syncRoomSubscriptions();
+    return room;
+}
+function roomCreationError(account, data) {
+    if (!isAdmin(account)) return '需要管理员权限';
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return '房间参数无效';
+    const { roomId, roomName, isPublic = true } = data;
+    if (typeof roomId !== 'string' || !/^[A-Za-z0-9_-]{2,20}$/.test(roomId)) return '房间ID应为2-20位字母、数字、下划线或连字符';
+    if (roomName !== undefined && (typeof roomName !== 'string' || roomName.length > 50)) return '房间名称最多50个字符';
+    if (typeof isPublic !== 'boolean') return '请选择公开或私有房间';
+    if (rooms.has(roomId)) return '房间已存在';
+    return null;
+}
 function broadcastRoomList() {
-    const roomList = Array.from(rooms.values()).map(room => ({
-        id: room.id,
-        name: room.name,
-        userCount: room.users.length,
-        created: room.created,
-        isPublic: room.isPublic
-    }));
-    
-    io.emit('room_list', roomList);
+    for (const socket of io.sockets.sockets.values()) {
+        const account = getUserByToken(socket.data.token);
+        socket.emit('room_list', visibleRooms(account));
+    }
 }
-
 function updateUserList(roomId) {
     const room = rooms.get(roomId);
-    if (room) {
-        io.to(roomId).emit('user_list', room.users.map(user => ({
-            id: user.id,
-            username: user.username,
-            joinTime: user.joinTime,
-            ip: user.ip,
-            isMuted: user.isMuted
-        })));
-    }
+    if (!room) return;
+    const unique = new Map(room.users.map(user => [user.username, user]));
+    io.to(roomChannel(roomId)).emit('user_list', Array.from(unique.values()).map(user => ({
+        id: user.id, username: user.username, joinTime: user.joinTime, ip: user.ip, isMuted: user.isMuted
+    })), roomId);
+}
+function switchRoom(socket, user, room) {
+    user.currentRoom = room.id;
+    socket.emit('room_joined', { roomId: room.id, roomName: room.name, userCount: new Set(room.users.map(member => member.username)).size });
+    socket.emit('message_history', (messages.get(room.id) || []).slice(-50), room.id);
+    updateUserList(room.id);
 }
 
 // 中间件
@@ -317,17 +376,25 @@ app.use('/client', express.static(path.join(__dirname, '../client')));
 app.use('/assets/katex', express.static(path.join(__dirname, 'node_modules/katex/dist')));
 app.use('/assets/prism', express.static(path.join(__dirname, 'node_modules/prismjs')));
 app.get('/assets/purify.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/dompurify/dist/purify.min.js')));
-app.use('/uploads', express.static(UPLOADS_DIR));
-
-// 创建默认房间
-rooms.set('default', {
-    id: 'default',
-    name: '公共聊天室',
-    users: [],
-    created: Date.now(),
-    isPublic: true
+app.get('/uploads/:storedName', authMiddleware, (req, res) => {
+    const file = fileStore.files.find(f => f.storedName === req.params.storedName);
+    if (!file || file.expired) return res.status(404).json({ error: '文件不存在或已过期' });
+    if (!canAccessRoom(req.auth, rooms.get(file.roomId))) return res.status(403).json({ error: '未获邀请，无法访问房间文件' });
+    res.set({ 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'; style-src 'unsafe-inline'" });
+    res.sendFile(path.join(UPLOADS_DIR, file.storedName));
 });
-messages.set('default', []);
+
+// Restore definitions and invitations without restoring live connections.
+const storedRooms = loadJSON(ROOMS_FILE, { rooms: [] });
+for (const saved of (Array.isArray(storedRooms.rooms) ? storedRooms.rooms : [])) {
+    if (typeof saved.id !== 'string') continue;
+    rooms.set(saved.id, { ...saved, isPublic: saved.isPublic !== false,
+        members: Array.isArray(saved.members) ? saved.members : [], users: [] });
+    messages.set(saved.id, []);
+}
+if (!rooms.has('default')) createRoom('default', '公共聊天室');
+rooms.get('default').isPublic = true;
+saveRooms();
 
 // API路由
 app.get('/', (req, res) => {
@@ -420,6 +487,7 @@ app.post('/api/register', (req, res) => {
     addUser(username, password, 'user', ip);
     const token = createToken(username, 'user');
     console.log(`新用户注册: ${username} (IP: ${ip})`);
+    sessionCookie(req, res, token);
     res.json({ success: true, token, username, role: 'user' });
 });
 
@@ -434,19 +502,23 @@ app.post('/api/login', (req, res) => {
     }
     const token = createToken(user.username, user.role);
     console.log(`用户登录: ${user.username} (${user.role})`);
+    sessionCookie(req, res, token);
     res.json({ success: true, token, username: user.username, role: user.role });
 });
 
 app.get('/api/me', authMiddleware, (req, res) => {
+    sessionCookie(req, res, req.authToken);
     const user = userStore.users.find(u => u.username === req.auth.username);
     res.json({ username: req.auth.username, role: user ? user.role : req.auth.role });
 });
 
 app.post('/api/logout', authMiddleware, (req, res) => {
-    const h = req.headers.authorization || '';
-    const token = h.replace(/^Bearer /, '');
-    delete userStore.tokens[token];
+    delete userStore.tokens[req.authToken];
+    res.clearCookie('lantalk_session');
     saveUsers();
+    for (const socket of io.sockets.sockets.values()) {
+        if (socket.data.token === req.authToken) socket.disconnect(true);
+    }
     res.json({ success: true });
 });
 
@@ -463,6 +535,7 @@ app.get('/api/accounts', adminMiddleware, (req, res) => {
 app.put('/api/users/:username', adminMiddleware, (req, res) => {
     const user = userStore.users.find(u => u.username === req.params.username);
     if (!user) return res.status(404).json({ error: '用户不存在' });
+    if (req.auth.role !== 'superadmin' && (user.role === 'superadmin' || (user.role === 'admin' && user.username !== req.auth.username))) return res.status(403).json({ error: '不能修改其他管理员账号' });
 
     const { newUsername, newPassword } = req.body;
     if (newUsername !== undefined) {
@@ -475,7 +548,14 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
         Object.values(userStore.tokens).forEach(t => {
             if (t.username === user.username) t.username = newUsername;
         });
+        for (const room of rooms.values()) {
+            room.members = room.members.map(name => name === user.username ? newUsername : name);
+            if (room.createdBy === user.username) room.createdBy = newUsername;
+        }
+        for (const file of fileStore.files) if (file.uploader === user.username) file.uploader = newUsername;
         user.username = newUsername;
+        saveRooms();
+        saveFiles();
     }
     if (newPassword !== undefined && newPassword !== '') {
         if (newPassword.length < 6) {
@@ -485,6 +565,8 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
         user.passwordHash = hashPassword(newPassword, user.salt);
     }
     saveUsers();
+    syncRoomSubscriptions();
+    for (const socket of io.sockets.sockets.values()) if (getUserByToken(socket.data.token)?.username === user.username) socket.emit('account_changed', { username: user.username, role: user.role });
     console.log(`管理员修改账号: ${req.params.username} -> ${user.username}`);
     res.json({ success: true, message: '修改成功', user: { username: user.username, role: user.role } });
 });
@@ -492,6 +574,7 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
 app.delete('/api/users/:username', adminMiddleware, (req, res) => {
     const user = userStore.users.find(u => u.username === req.params.username);
     if (!user) return res.status(404).json({ error: '用户不存在' });
+    if (user.role === 'superadmin' || (req.auth.role !== 'superadmin' && user.role === 'admin')) return res.status(403).json({ error: '不能删除该管理员账号' });
     if (user.username === req.auth.username) {
         return res.status(400).json({ error: '不能删除当前登录的账号' });
     }
@@ -500,8 +583,29 @@ app.delete('/api/users/:username', adminMiddleware, (req, res) => {
         if (userStore.tokens[t].username === user.username) delete userStore.tokens[t];
     });
     saveUsers();
+    for (const socket of io.sockets.sockets.values()) if (!getUserByToken(socket.data.token)) socket.disconnect(true);
+    for (const room of rooms.values()) {
+        room.members = room.members.filter(name => name !== user.username);
+        if (room.createdBy === user.username) room.createdBy = '';
+    }
+    saveRooms();
+    syncRoomSubscriptions();
     console.log(`管理员删除账号: ${user.username}`);
     res.json({ success: true, message: `用户 ${user.username} 已删除` });
+});
+
+app.put('/api/users/:username/role', superadminMiddleware, (req, res) => {
+    const account = userStore.users.find(user => user.username === req.params.username);
+    if (!account) return res.status(404).json({ error: '用户不存在' });
+    if (account.role === 'superadmin') return res.status(403).json({ error: '不能更改超级管理员身份' });
+    if (!['admin', 'user'].includes(req.body.role)) return res.status(400).json({ error: '角色必须为管理员或普通用户' });
+    account.role = req.body.role;
+    saveUsers();
+    for (const socket of io.sockets.sockets.values()) {
+        if (getUserByToken(socket.data.token)?.username === account.username) socket.emit('account_changed', { username: account.username, role: account.role });
+    }
+    syncRoomSubscriptions();
+    res.json({ success: true, username: account.username, role: account.role });
 });
 
 // 服务器配置
@@ -524,6 +628,7 @@ app.get('/api/limits', (req, res) => {
 // 房间文件列表（右侧栏）
 app.get('/api/files', authMiddleware, (req, res) => {
     const roomId = String(req.query.room || 'default');
+    if (!canAccessRoom(req.auth, rooms.get(roomId))) return res.status(403).json({ error: '无权访问该房间' });
     const list = fileStore.files
         .filter(f => f.roomId === roomId)
         .sort((a, b) => b.createdAt - a.createdAt)
@@ -606,7 +711,6 @@ app.put('/api/config', adminMiddleware, (req, res) => {
 
 // ============ 文件上传 API ============
 app.post('/api/upload', authMiddleware, (req, res) => {
-    const token = req.headers.authorization.replace(/^Bearer /, '');
     const ip = clientIpOf(req);
 
     // 被禁言的 IP 不允许上传
@@ -618,6 +722,7 @@ app.post('/api/upload', authMiddleware, (req, res) => {
     if (!rooms.has(roomId)) {
         return res.status(400).json({ error: '目标房间不存在' });
     }
+    if (!canAccessRoom(req.auth, rooms.get(roomId))) return res.status(403).json({ error: '无权访问该房间' });
 
     let originalName = 'file';
     try { originalName = decodeURIComponent(String(req.headers['x-filename'] || 'file')); } catch (e) {}
@@ -673,12 +778,17 @@ app.post('/api/upload', authMiddleware, (req, res) => {
             return res.status(400).json({ error: '空文件' });
         }
 
+        const account = getUserByToken(req.authToken);
+        if (!canAccessRoom(account, rooms.get(roomId))) {
+            fs.unlink(filePath, () => {});
+            return res.status(403).json({ error: '房间访问权限已失效' });
+        }
         const record = {
             storedName,
             name: safeName,
             size: received,
             mimeType,
-            uploader: req.auth.username,
+            uploader: account.username,
             roomId,
             createdAt: Date.now(),
             expired: false
@@ -727,218 +837,68 @@ app.post('/api/broadcast', adminMiddleware, (req, res) => {
     io.emit('message', adminMessage);
     res.json({ success: true, message: '广播发送成功' });
 });
-// 创建房间API
 app.post('/api/rooms', adminMiddleware, (req, res) => {
-    const { roomId, roomName } = req.body;
-
-    console.log('API创建房间请求:', roomId, 'by', req.auth.username);
-
-    if (!roomId) {
-        return res.status(400).json({ error: '房间ID不能为空' });
-    }
-
-    if (roomId.length < 2 || roomId.length > 20) {
-        return res.status(400).json({ error: '房间ID长度应为2-20个字符' });
-    }
-
-    // 检查房间是否已存在
-    if (rooms.has(roomId)) {
-        return res.status(400).json({ error: '房间已存在' });
-    }
-
-    // 创建新房间
-    const room = createRoom(roomId, roomName || roomId);
-    
-    console.log(`通过API创建房间: ${room.name} (${roomId}) by ${req.auth.username}`);
-    
-    // 广播房间列表更新
-    broadcastRoomList();
-    
-    res.json({ 
-        success: true, 
-        message: `房间 "${room.name}" 创建成功`,
-        room: {
-            id: room.id,
-            name: room.name,
-            userCount: room.users.length,
-            created: room.created
-        }
-    });
+    const error = roomCreationError(req.auth, req.body);
+    if (error) return res.status(400).json({ error });
+    const { roomId, roomName, isPublic = true } = req.body;
+    const room = createRoom(roomId, roomName, isPublic, req.auth.username);
+    res.json({ success: true, message: '房间已创建', room: roomInfo(room, req.auth) });
 });
-
-// 删除房间API
-app.delete('/api/rooms/:roomId', adminMiddleware, (req, res) => {
-    const { roomId } = req.params;
-    const { force = false } = req.query;
-    
-    console.log('收到删除房间请求:', roomId, '强制模式:', force);
-    
-    if (!roomId) {
-        return res.status(400).json({ error: '房间ID不能为空' });
+function managedRoom(req, res, next) {
+    const room = rooms.get(req.params.roomId);
+    if (!room) return res.status(404).json({ error: '房间不存在' });
+    if (!canManageRoom(req.auth, room)) return res.status(403).json({ error: '仅房间创建者或超级管理员可管理此房间' });
+    req.room = room;
+    next();
+}
+app.post('/api/rooms/:roomId/invitations', adminMiddleware, managedRoom, (req, res) => {
+    const room = req.room;
+    if (room.isPublic) return res.status(400).json({ error: '公开房间已自动加入所有用户' });
+    if (!userStore.users.some(u => u.username === req.body.username)) return res.status(404).json({ error: '该账号不存在，请先注册' });
+    if (!room.members.includes(req.body.username)) room.members.push(req.body.username);
+    saveRooms();
+    syncRoomSubscriptions();
+    for (const socket of io.sockets.sockets.values()) {
+        if (getUserByToken(socket.data.token)?.username === req.body.username) socket.emit('room_invited', { roomId: room.id, roomName: room.name });
     }
-    
-    // 不能删除默认房间
-    if (roomId === 'default') {
-        return res.status(400).json({ error: '不能删除默认房间' });
-    }
-    
-    const room = rooms.get(roomId);
-    if (!room) {
-        return res.status(404).json({ error: '房间不存在' });
-    }
-    
-    // 如果房间有用户且不是强制删除模式
-    if (room.users.length > 0 && !force) {
-        return res.status(400).json({ 
-            error: '房间中还有用户，无法删除',
-            userCount: room.users.length,
-            users: room.users.map(u => u.username)
-        });
-    }
-    
-    // 强制删除：踢出所有用户
-    if (room.users.length > 0 && force) {
-        console.log(`强制删除房间: 踢出 ${room.users.length} 个用户`);
-        
-        // 向房间内所有用户发送被踢出通知
-        room.users.forEach(user => {
-            const kickMessage = {
-                id: generateId(),
-                type: 'admin',
-                username: '系统',
-                content: `房间 "${room.name}" 已被管理员删除，您已被移出房间`,
-                timestamp: Date.now()
-            };
-            
-            // 发送踢出消息
-            io.to(user.socketId).emit('message', kickMessage);
-            io.to(user.socketId).emit('room_deleted', {
-                roomId: roomId,
-                roomName: room.name,
-                reason: '房间已被管理员删除'
-            });
-            
-            // 将用户移回默认房间
-            const userSocket = io.sockets.sockets.get(user.socketId);
-            if (userSocket) {
-                userSocket.leave(roomId);
-                userSocket.join('default');
-                
-                // 更新用户当前房间
-                user.currentRoom = 'default';
-                
-                // 发送默认房间的历史消息
-                userSocket.emit('message_history', (messages.get('default') || []).slice(-50));
-                
-                // 发送加入默认房间的消息（系统操作提示，大消息框）
-                const joinMessage = {
-                    id: generateId(),
-                    type: 'admin',
-                    username: '系统',
-                    content: `${user.username} 被移入默认房间`,
-                    timestamp: Date.now(),
-                    room: 'default'
-                };
-                
-                messages.get('default')?.push(joinMessage);
-                userSocket.emit('message', joinMessage);
-                userSocket.to('default').emit('message', joinMessage);
-            }
-        });
-        
-        // 从房间中移除所有用户
-        room.users = [];
-    }
-    
-    // 删除房间
-    rooms.delete(roomId);
-    messages.delete(roomId);
-    
-    console.log(`管理员删除房间: ${room.name} (${roomId})${force ? ' [强制模式]' : ''}`);
-    
-    // 广播房间列表更新
-    broadcastRoomList();
-    
-    res.json({ 
-        success: true, 
-        message: `房间 "${room.name}" 删除成功${force ? '（已踢出所有用户）' : ''}`,
-        force: force,
-        kickedUsers: force ? room.users.length : 0
-    });
+    res.json({ success: true, message: '邀请已发送，用户已获得房间访问权限' });
 });
-
-// 添加踢出用户API
-app.post('/api/rooms/:roomId/kick-users', adminMiddleware, (req, res) => {
-    const { roomId } = req.params;
-    
-    if (!roomId) {
-        return res.status(400).json({ error: '房间ID不能为空' });
-    }
-    
-    const room = rooms.get(roomId);
-    if (!room) {
-        return res.status(404).json({ error: '房间不存在' });
-    }
-    
-    if (room.users.length === 0) {
-        return res.status(400).json({ error: '房间中没有用户' });
-    }
-    
-    console.log(`踢出房间 ${room.name} 的所有用户: ${room.users.length} 人`);
-    
-    // 踢出所有用户
-    room.users.forEach(user => {
-        const kickMessage = {
-            id: generateId(),
-            type: 'admin',
-            username: '系统',
-            content: `您已被管理员从房间 "${room.name}" 踢出`,
-            timestamp: Date.now()
-        };
-        
-        // 发送踢出消息
-        io.to(user.socketId).emit('message', kickMessage);
-        io.to(user.socketId).emit('kicked_from_room', {
-            roomId: roomId,
-            roomName: room.name,
-            reason: '管理员操作'
-        });
-        
-        // 将用户移回默认房间
-        const userSocket = io.sockets.sockets.get(user.socketId);
-        if (userSocket) {
-            userSocket.leave(roomId);
-            userSocket.join('default');
-            user.currentRoom = 'default';
-            
-            // 发送默认房间的历史消息
-            userSocket.emit('message_history', (messages.get('default') || []).slice(-50));
+function removeRoomConnections(room, reason) {
+    for (const user of [...room.users]) {
+        const socket = io.sockets.sockets.get(user.socketId);
+        if (!socket) continue;
+        socket.leave(roomChannel(room.id));
+        if (user.currentRoom === room.id) {
+            socket.emit('kicked_from_room', { roomId: room.id, roomName: room.name, reason });
+            switchRoom(socket, user, rooms.get('default'));
         }
-    });
-    
-    // 清空房间用户列表
-    const kickedCount = room.users.length;
+    }
     room.users = [];
-    
-    // 更新用户列表
-    updateUserList('default');
+}
+app.delete('/api/rooms/:roomId', adminMiddleware, managedRoom, (req, res) => {
+    if (req.room.id === 'default') return res.status(400).json({ error: '不能删除默认房间' });
+    const force = req.query.force === 'true';
+    if (req.room.users.length && !force) return res.status(400).json({ error: '房间中还有用户，无法删除', userCount: req.room.users.length });
+    const kickedUsers = req.room.users.length;
+    removeRoomConnections(req.room, '房间已被管理员删除');
+    rooms.delete(req.room.id);
+    messages.delete(req.room.id);
+    saveRooms();
     broadcastRoomList();
-    
-    res.json({ 
-        success: true, 
-        message: `已从房间 "${room.name}" 踢出 ${kickedCount} 个用户`,
-        kickedCount: kickedCount
-    });
+    res.json({ success: true, message: '房间已删除', force, kickedUsers });
 });
-
-app.get('/api/rooms', (req, res) => {
-    const roomList = Array.from(rooms.values()).map(room => ({
-        id: room.id,
-        name: room.name,
-        userCount: room.users.length,
-        created: room.created
-    }));
-    res.json(roomList);
+app.post('/api/rooms/:roomId/kick-users', adminMiddleware, managedRoom, (req, res) => {
+    if (req.room.isPublic) return res.status(400).json({ error: '公开房间自动加入所有用户，不能移除成员' });
+    const kickedCount = req.room.users.length;
+    removeRoomConnections(req.room, '房间成员已被管理员移除');
+    req.room.members = [req.room.createdBy].filter(Boolean);
+    saveRooms();
+    syncRoomSubscriptions();
+    res.json({ success: true, message: '已移除受邀成员', kickedCount });
+});
+app.get('/api/rooms', authMiddleware, (req, res) => {
+    if (req.query.manage === '1' && !isAdmin(req.auth)) return res.status(403).json({ error: '需要管理员权限' });
+    res.json(visibleRooms(req.auth, req.query.manage === '1'));
 });
 
 // Socket.IO处理 - 现在 io 已经初始化了
@@ -946,226 +906,66 @@ io.on('connection', (socket) => {
     const clientIP = socket.handshake.address;
     console.log(`用户连接: ${socket.id} from ${clientIP}`);
 
-    socket.on('create_room', (data) => {
-        const { roomId, roomName } = data;
-        const user = users.get(socket.id);
-        
-        if (!user) {
-            socket.emit('error', '请先加入聊天室');
-            return;
-        }
-        
-        if (!roomId || roomId.trim() === '') {
-            socket.emit('error', '房间ID不能为空');
-            return;
-        }
-        // 检查用户是否被禁言
-        if (user.isMuted) {
-            socket.emit('error', '你已被禁言，无法创建房间');
-            return;
-        }
-        
-        // 检查用户IP是否被禁言
-        if (mutedIPs.has(user.ip)) {
-            socket.emit('error', '你的IP已被禁言，无法创建房间');
-            return;
-        }
-        // 检查房间是否已存在
-        if (rooms.has(roomId)) {
-            socket.emit('error', '房间已存在');
-            return;
-        }
-        
-        // 创建新房间
-        createRoom(roomId, roomName || roomId);
-        
-        // 自动加入新房间
-        socket.emit('room_created', { 
-            roomId, 
-            roomName: roomName || roomId 
-        });
-        
-        // 更新所有客户端的房间列表
-        broadcastRoomList();
-        
-        console.log(`用户 ${user.username} 创建房间: ${roomName || roomId}`);
+    socket.on('create_room', (data = {}) => {
+        const user = socketUser(socket);
+        const error = roomCreationError(user, data);
+        if (error) return socket.emit('error', error);
+        const room = createRoom(data.roomId, data.roomName, data.isPublic !== false, user.username);
+        socket.emit('room_created', { roomId: room.id, roomName: room.name });
     });
-    // 添加删除房间事件
+    // Keep legacy clients from bypassing the same management policy over WebSocket.
     socket.on('delete_room', (data) => {
-        const { roomId } = data;
-        const user = users.get(socket.id);
-        
-        if (!user) {
-            socket.emit('error', '请先加入聊天室');
-            return;
-        }
-        
-        if (!roomId) {
-            socket.emit('error', '房间ID不能为空');
-            return;
-        }
-        
-        // 不能删除默认房间
-        if (roomId === 'default') {
-            socket.emit('error', '不能删除默认房间');
-            return;
-        }
-        
+        const { roomId } = data || {};
+        const user = socketUser(socket);
         const room = rooms.get(roomId);
-        if (!room) {
-            socket.emit('error', '房间不存在');
-            return;
-        }
-        
-        // 检查房间是否有用户
-        if (room.users.length > 0) {
-            socket.emit('error', '房间中还有用户，无法删除');
-            return;
-        }
-        
-        // 删除房间
-        rooms.delete(roomId);
-        messages.delete(roomId);
-        
-        console.log(`用户 ${user.username} 删除房间: ${room.name} (${roomId})`);
-        
-        // 广播房间列表更新
+        if (!canManageRoom(user, room)) return socket.emit('error', '需要房间管理权限');
+        if (room.id === 'default') return socket.emit('error', '不能删除默认房间');
+        if (room.users.length) return socket.emit('error', '请在管理面板中强制删除有用户的房间');
+        rooms.delete(room.id);
+        messages.delete(room.id);
+        saveRooms();
         broadcastRoomList();
-        
-        socket.emit('room_deleted', { 
-            roomId, 
-            roomName: room.name 
-        });
+        socket.emit('room_deleted', { roomId: room.id, roomName: room.name });
     });
-
-    // 继续其他Socket事件
     socket.on('join_room', (data) => {
-        const { roomId } = data;
-        const user = users.get(socket.id);
-        
-        if (!user) {
-            socket.emit('error', '请先加入聊天室');
-            return;
-        }
-        
-        if (!rooms.has(roomId)) {
-            socket.emit('error', '房间不存在');
-            return;
-        }
-        
-        // 离开当前房间
-        if (user.currentRoom) {
-            socket.leave(user.currentRoom);
-            // 向右上角提示（不写入历史）
-            socket.to(user.currentRoom).emit('user_left', {
-                username: user.username,
-                room: user.currentRoom,
-                reason: 'switch'
-            });
-        }
-        
-        // 加入新房间
+        const { roomId } = data || {};
+        const user = socketUser(socket);
         const room = rooms.get(roomId);
-        user.currentRoom = roomId;
-        
-        socket.join(roomId);
-        
-        // 如果用户不在房间用户列表中，则添加
-        if (!room.users.find(u => u.socketId === socket.id)) {
-            room.users.push(user);
-        }
-        
-        // 向右上角提示（不写入历史）
-        socket.to(roomId).emit('user_joined', {
-            username: user.username,
-            room: roomId,
-            reason: 'switch'
-        });
-        
-        // 发送新房间的历史消息
-        socket.emit('message_history', (messages.get(roomId) || []).slice(-50));
-        
-        // 更新用户列表
-        updateUserList(roomId);
-        
-        // 发送房间切换成功事件
-        socket.emit('room_joined', {
-            roomId: room.id,
-            roomName: room.name,
-            userCount: room.users.length
-        });
-        
-        console.log(`用户 ${user.username} 加入房间: ${room.name}`);
+        if (!canAccessRoom(user, room)) return socket.emit('error', '房间不存在或未获邀请');
+        switchRoom(socket, user, room);
     });
-
     socket.on('join', (data) => {
-        const { token, roomId = 'default' } = data;
-
+        const { token, roomId = 'default' } = data || {};
         const auth = getUserByToken(token);
-        if (!auth) {
-            socket.emit('error', '登录已过期，请重新登录');
-            return;
-        }
-        const account = userStore.users.find(u => u.username === auth.username);
-        const username = account ? account.username : auth.username;
-
-        const isIPMuted = mutedIPs.has(clientIP);
-        const user = {
-            id: generateId(),
-            username,
-            socketId: socket.id,
-            joinTime: Date.now(),
-            ip: clientIP,
-            isMuted: isIPMuted,  // 设置禁言状态
-            currentRoom: roomId
-        };
-        
-        users.set(socket.id, user);
-        
-        // 确保房间存在
-        createRoom(roomId, roomId === 'default' ? '公共聊天室' : roomId);
-        
-        socket.join(roomId);
-        
+        if (!auth) return socket.emit('error', '登录已过期，请重新登录');
         const room = rooms.get(roomId);
-        if (!room.users.find(u => u.socketId === socket.id)) {
-            room.users.push(user);
-        }
-
-        // 若此前有待广播的离开（页面刷新场景），取消它并跳过本次加入提示
-        const wasRefresh = cancelPendingLeave(username);
-        
-        // 如果被禁言，发送提示消息
-        if (isIPMuted) {
-            socket.emit('message', {
-                id: generateId(),
-                type: 'admin',
-                username: '系统',
-                content: '你的IP已被禁言，无法发送消息和创建房间',
-                timestamp: Date.now()
-            });
-        }
-        
-        socket.emit('message_history', (messages.get(roomId) || []).slice(-50));
-        if (!wasRefresh) {
-            broadcastUserJoined(socket, roomId, username, 'join');
-        }
-        
-        updateUserList(roomId);
-        broadcastRoomList();
-        
-        console.log(`用户 ${username} (IP: ${clientIP}) 加入房间 ${roomId} ${isIPMuted ? '[禁言状态]' : ''}${wasRefresh ? ' [刷新重连，静默]' : ''}`);
+        if (!canAccessRoom(auth, room)) return socket.emit('error', '房间不存在或未获邀请');
+        clearTimeout(socket.data.expiryTimer);
+        socket.data.token = token;
+        socket.data.expiryTimer = setTimeout(() => {
+            socket.emit('error', '登录已过期，请重新登录');
+            socket.disconnect(true);
+        }, Math.max(0, userStore.tokens[token].expiresAt - Date.now()));
+        const user = { id: generateId(), username: auth.username, role: auth.role,
+            socketId: socket.id, joinTime: Date.now(), ip: clientIP.replace('::ffff:', ''),
+            isMuted: mutedIPs.has(clientIP.replace('::ffff:', '')), currentRoom: roomId };
+        users.set(socket.id, user);
+        syncRoomSubscriptions();
+        socket.emit('account_changed', auth);
+        switchRoom(socket, user, room);
+        if (!cancelPendingLeave(user.username)) broadcastUserJoined(socket, roomId, user.username, 'join');
     });
 
     socket.on('send_message', (data) => {
-        const { content, roomId = 'default' } = data;
-        const user = users.get(socket.id);
+        const { content, roomId = 'default' } = data || {};
+        const user = socketUser(socket);
         
         if (!user) {
             socket.emit('error', '请先加入聊天室');
             return;
         }
         
+        if (!canAccessRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
         if (user.isMuted) {
             socket.emit('error', '你已被禁言，无法发送消息');
             return;
@@ -1192,7 +992,7 @@ io.on('connection', (socket) => {
         
         const roomMessages = messages.get(roomId) || [];
         roomMessages.push(message);
-        io.to(roomId).emit('message', message);
+        io.to(roomChannel(roomId)).emit('message', message);
         
         console.log(`消息 [${roomId}]: ${user.username} (IP: ${user.ip}): ${content}`);
     });
@@ -1200,12 +1000,13 @@ io.on('connection', (socket) => {
     // 文件消息：客户端上传成功后通知服务器广播
     socket.on('send_file', (data) => {
         const { storedName, roomId = 'default' } = data || {};
-        const user = users.get(socket.id);
+        const user = socketUser(socket);
 
         if (!user) {
             socket.emit('error', '请先加入聊天室');
             return;
         }
+        if (!canAccessRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
         if (user.isMuted) {
             socket.emit('error', '你已被禁言，无法发送文件');
             return;
@@ -1224,7 +1025,7 @@ io.on('connection', (socket) => {
             socket.emit('error', '文件已过期');
             return;
         }
-        record.roomId = roomId;
+        if (record.roomId !== roomId || record.uploader !== user.username) return socket.emit('error', '不能转发其他用户或其他房间的文件');
 
         const message = {
             id: generateId(),
@@ -1243,20 +1044,20 @@ io.on('connection', (socket) => {
 
         const roomMessages = messages.get(roomId) || [];
         roomMessages.push(message);
-        io.to(roomId).emit('message', message);
+        io.to(roomChannel(roomId)).emit('message', message);
         saveFiles();
 
         console.log(`文件消息 [${roomId}]: ${record.name} by ${user.username}`);
     });
 
     socket.on('typing', (data) => {
-        const { isTyping, roomId = 'default' } = data;
-        const user = users.get(socket.id);
+        const { isTyping, roomId = 'default' } = data || {};
+        const user = socketUser(socket);
         
-        if (user && !user.isMuted) {
-            socket.to(roomId).emit('user_typing', {
+        if (user && !user.isMuted && canAccessRoom(user, rooms.get(roomId))) {
+            socket.to(roomChannel(roomId)).emit('user_typing', {
                 username: user.username,
-                isTyping
+                isTyping, room: roomId
             });
         }
     });
@@ -1266,6 +1067,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
+        clearTimeout(socket.data.expiryTimer);
         const user = users.get(socket.id);
         if (user) {
             const leaveRoom = user.currentRoom;
@@ -1274,7 +1076,7 @@ io.on('connection', (socket) => {
                 const userIndex = room.users.findIndex(u => u.socketId === socket.id);
                 if (userIndex > -1) {
                     room.users.splice(userIndex, 1);
-                    if (roomId === leaveRoom) updateUserList(roomId);
+                    updateUserList(roomId);
                 }
             });
 

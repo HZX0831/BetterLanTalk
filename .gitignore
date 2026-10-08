@@ -37,3 +37,6 @@ server/server.err
 # 上传的文件
 server/uploads/
 server/files.json
+
+# 房间定义与邀请名单
+server/rooms.json

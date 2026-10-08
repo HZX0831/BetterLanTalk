@@ -68,13 +68,14 @@
         <!-- 侧边栏 -->
         <div class="sidebar">
             <h3>聊天室
-                <button id="create-room-btn" style="background: #374151; color: white; border: none; border-radius: 3px; padding: 2px 8px; font-size: 12px; cursor: pointer;">+ 新建</button>
+                <button id="create-room-btn" class="hidden" style="background: #374151; color: white; border: none; border-radius: 3px; padding: 2px 8px; font-size: 12px; cursor: pointer;">+ 新建</button>
             </h3>
             
             <!-- 房间创建表单 -->
             <div id="room-create-form" style="display: none; background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; margin-bottom: 10px;">
                 <input type="text" id="new-room-id" placeholder="房间ID" style="width: 100%; padding: 5px; margin-bottom: 5px; border: none; border-radius: 3px;">
                 <input type="text" id="new-room-name" placeholder="房间名称(可选)" style="width: 100%; padding: 5px; margin-bottom: 5px; border: none; border-radius: 3px;">
+                <select id="new-room-visibility" aria-label="房间可见性" style="width: 100%; margin-bottom: 8px;"><option value="public">公开 · 所有人自动加入</option><option value="private">私有 · 仅受邀用户</option></select>
                 <div style="display: flex; gap: 5px;">
                     <button onclick="createRoom()" style="flex: 1; background: #374151; color: white; border: none; border-radius: 3px; padding: 5px; cursor: pointer; font-size: 12px;">创建</button>
                     <button onclick="cancelCreateRoom()" style="flex: 1; background: #6b7280; color: white; border: none; border-radius: 3px; padding: 5px; cursor: pointer; font-size: 12px;">取消</button>
@@ -237,6 +238,7 @@
                     <div style="margin-bottom: 10px;">
                         <input type="text" id="admin-room-id" placeholder="房间ID (2-20字符)">
                         <input type="text" id="admin-room-name" placeholder="房间名称 (可选)">
+                        <select id="admin-room-visibility" aria-label="房间可见性" style="width: 100%; margin-bottom: 8px;"><option value="public">公开 · 所有人自动加入</option><option value="private">私有 · 仅受邀用户</option></select>
                         <button class="success" onclick="adminAPI.createRoom()">创建房间</button>
                         <button class="secondary" onclick="adminAPI.loadRooms()">刷新</button>
                     </div>
@@ -469,10 +471,31 @@
                     token: data.token, username: data.username, role: data.userRole || data.role, origin
                 }));
 
-                if (this.userRole === 'admin') {
-                    document.getElementById('admin-view-btn').classList.remove('hidden');
-                }
+                this.applyAccount(data);
                 this.connectToServer(origin);
+            }
+
+            applyAccount(account) {
+                this.currentUser = account.username;
+                this.userRole = account.role || 'user';
+                const manages = ['admin', 'superadmin'].includes(this.userRole);
+                document.getElementById('admin-view-btn').classList.toggle('hidden', !manages);
+                document.getElementById('create-room-btn').classList.toggle('hidden', !manages);
+                if (!manages) {
+                    this.hideRoomCreateForm();
+                    document.getElementById('admin-view').classList.add('hidden');
+                    document.getElementById('chat-view').classList.remove('hidden');
+                    document.getElementById('chat-view').style.display = 'flex';
+                    document.getElementById('admin-view-btn').textContent = '管理';
+                }
+                for (const store of [localStorage, sessionStorage]) {
+                    const raw = store.getItem('lantalk_auth');
+                    if (!raw) continue;
+                    try {
+                        const saved = JSON.parse(raw);
+                        store.setItem('lantalk_auth', JSON.stringify({ ...saved, username: this.currentUser, role: this.userRole }));
+                    } catch {}
+                }
             }
 
             resolveServerOrigin() {
@@ -505,9 +528,7 @@
                     this.currentUser = me.username;
                     this.userRole = me.role || 'user';
                     this.serverOrigin = saved.origin;
-                    if (this.userRole === 'admin') {
-                        document.getElementById('admin-view-btn').classList.remove('hidden');
-                    }
+                    this.applyAccount(me);
                     this.connectToServer(saved.origin);
                 } catch (e) {
                     console.log('自动登录失败，需要手动登录');
@@ -645,13 +666,14 @@
                     return;
                 }
 
+                const uploadRoom = this.currentRoom;
                 const item = { name: file.name || ('粘贴文件-' + Date.now()), size: file.size, status: '上传中...' };
                 this.pendingFiles.push(item);
                 this.renderUploadPreview();
 
                 try {
                     const resp = await fetch(
-                        this.serverOrigin + '/api/upload?room=' + encodeURIComponent(this.currentRoom),
+                        this.serverOrigin + '/api/upload?room=' + encodeURIComponent(uploadRoom),
                         {
                             method: 'POST',
                             headers: {
@@ -670,7 +692,7 @@
                         item.status = '✅ 已发送';
                         this.socket.emit('send_file', {
                             storedName: data.file.storedName,
-                            roomId: this.currentRoom
+                            roomId: uploadRoom
                         });
                     }
                 } catch (err) {
@@ -689,14 +711,15 @@
             // 右侧文件栏
             async loadFilePanel() {
                 if (!this.serverOrigin || !this.authToken) return;
+                const requestedRoom = this.currentRoom;
                 try {
                     const resp = await fetch(
-                        this.serverOrigin + '/api/files?room=' + encodeURIComponent(this.currentRoom),
+                        this.serverOrigin + '/api/files?room=' + encodeURIComponent(requestedRoom),
                         { headers: { 'Authorization': 'Bearer ' + this.authToken } }
                     );
                     if (!resp.ok) return;
                     const files = await resp.json();
-                    this.renderFilePanel(files);
+                    if (this.currentRoom === requestedRoom) this.renderFilePanel(files);
                 } catch (e) {}
             }
 
@@ -766,6 +789,7 @@
             }
 
             toggleAdminView() {
+                if (!['admin', 'superadmin'].includes(this.userRole)) return;
                 const adminView = document.getElementById('admin-view');
                 const chatView = document.getElementById('chat-view');
                 const showingAdmin = adminView.classList.contains('hidden');
@@ -838,7 +862,8 @@
 
                 this.socket.emit('create_room', {
                     roomId: roomId,
-                    roomName: roomName || roomId
+                    roomName: roomName || roomId,
+                    isPublic: document.getElementById('new-room-visibility').value === 'public'
                 });
 
                 this.hideRoomCreateForm();
@@ -860,9 +885,6 @@
                     roomId: roomId
                 });
 
-                // 更新界面显示
-                document.getElementById('current-room').innerHTML = 
-                    `${roomName} <span id="connection-status" class="connection-status status-connected">已连接</span>`;
             }
 
             // 连接服务器
@@ -918,6 +940,10 @@
                     this.showError('❌ 连接错误: ' + (error.message || '未知错误'));
                 });
 
+                this.socket.on('account_changed', account => this.applyAccount(account));
+                this.socket.on('room_invited', room => this.showToast(`已获邀加入私有房间：${room.roomName}`));
+                this.socket.on('kicked_from_room', data => this.showToast(data.reason));
+
                 // 房间创建成功
                 this.socket.on('room_created', (data) => {
                     const { roomId, roomName } = data;
@@ -930,11 +956,20 @@
                 this.socket.on('room_joined', (data) => {
                     const { roomId, roomName, userCount } = data;
                     this.currentRoom = roomId;
+                    const heading = document.getElementById('current-room');
+                    heading.replaceChildren(document.createTextNode(roomName + ' '));
+                    const status = document.createElement('span');
+                    status.id = 'connection-status';
+                    status.className = 'connection-status status-connected';
+                    status.textContent = '已连接';
+                    heading.appendChild(status);
+                    document.getElementById('typing-indicator').textContent = '';
                     this.showSystemMessage(`✅ 已加入房间: ${roomName} (${userCount}人在线)`);
                     
                     // 更新房间列表激活状态
                     this.updateRoomActiveState(roomId);
                     // 刷新右侧文件栏
+                    this.renderFilePanel([]);
                     this.loadFilePanel();
                 });
 
@@ -946,6 +981,7 @@
 
                 // 接收消息
                 this.socket.on('message', (message) => {
+                    if (message.room && message.room !== this.currentRoom) return;
                     this.displayMessage(message);
                     this.maybeNotify(message);
                     // 收到文件消息时立即刷新右侧文件栏
@@ -954,16 +990,17 @@
 
                 // 用户进入 / 离开（右上角限时提示）
                 this.socket.on('user_joined', (data) => {
-                    if (!data || !data.username || data.username === this.currentUser) return;
+                    if (!data || data.room !== this.currentRoom || !data.username || data.username === this.currentUser) return;
                     this.showToast(`✅ ${data.username} 加入了${data.reason === 'switch' ? '房间' : '聊天室'}`);
                 });
                 this.socket.on('user_left', (data) => {
-                    if (!data || !data.username || data.username === this.currentUser) return;
+                    if (!data || data.room !== this.currentRoom || !data.username || data.username === this.currentUser) return;
                     this.showToast(`👋 ${data.username} 离开了${data.reason === 'switch' ? '房间' : '聊天室'}`);
                 });
 
                 // 接收历史消息
-                this.socket.on('message_history', (messages) => {
+                this.socket.on('message_history', (messages, roomId) => {
+                    if (roomId !== this.currentRoom) return;
                     const container = document.getElementById('messages-container');
                     container.innerHTML = '';
                     messages.forEach(msg => this.displayMessage(msg));
@@ -971,12 +1008,14 @@
                 });
 
                 // 更新用户列表
-                this.socket.on('user_list', (users) => {
+                this.socket.on('user_list', (users, roomId) => {
+                    if (roomId !== this.currentRoom) return;
                     this.updateUserList(users);
                 });
 
                 // 用户输入状态
                 this.socket.on('user_typing', (data) => {
+                    if (data.room !== this.currentRoom) return;
                     this.showTypingIndicator(data.username, data.isTyping);
                 });
 
@@ -1238,13 +1277,9 @@
                     const roomElement = document.createElement('div');
                     const isActive = room.id === this.currentRoom;
                     roomElement.className = `room-item ${isActive ? 'active' : ''}`;
-                    roomElement.innerHTML = `
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <span>${room.name}</span>
-                            <span style="font-size: 11px; opacity: 0.8;">${room.userCount}</span>
-                        </div>
-                    `;
-                    
+                    roomElement.dataset.roomId = room.id;
+                    roomElement.textContent = `${room.name} · ${room.isPublic ? '公开' : '私有'} (${room.userCount})`;
+
                     roomElement.addEventListener('click', () => {
                         if (room.id !== this.currentRoom) {
                             this.joinRoom(room.id, room.name);
@@ -1267,14 +1302,7 @@
             // 更新房间激活状态
             updateRoomActiveState(activeRoomId) {
                 document.querySelectorAll('.room-item').forEach(item => {
-                    item.classList.remove('active');
-                });
-                
-                document.querySelectorAll('.room-item').forEach(item => {
-                    if (item.textContent.includes(activeRoomId) || 
-                        item.textContent.includes(this.currentRoom)) {
-                        item.classList.add('active');
-                    }
+                    item.classList.toggle('active', item.dataset.roomId === activeRoomId);
                 });
             }
 
@@ -1427,25 +1455,58 @@
                     this.loadConfig();
                 } catch (e) { alert('❌ ' + e.message); }
             },
+            row(label, metadata) {
+                const row = document.createElement('div');
+                row.className = 'admin-item';
+                const info = document.createElement('div');
+                const title = document.createElement('strong');
+                title.textContent = label;
+                const meta = document.createElement('span');
+                meta.className = 'admin-meta';
+                meta.textContent = ' ' + metadata;
+                info.append(title, meta);
+                const actions = document.createElement('div');
+                row.append(info, actions);
+                return { row, actions };
+            },
+            button(actions, label, callback, style = 'secondary') {
+                const button = document.createElement('button');
+                button.className = style;
+                button.textContent = label;
+                button.addEventListener('click', callback);
+                actions.appendChild(button);
+            },
             async loadRooms() {
                 try {
-                    const rooms = await fetch(this.origin() + '/api/rooms').then(r => r.json());
+                    const rooms = await this.request('/api/rooms?manage=1');
                     const el = document.getElementById('admin-rooms-list');
-                    el.innerHTML = rooms.map(r => `
-                        <div class="admin-item">
-                            <div><strong>${r.name}</strong> <span class="admin-meta">ID: ${r.id} | ${r.userCount}人</span></div>
-                            <div>
-                                ${r.id !== 'default' ? `<button class="danger" onclick="adminAPI.deleteRoom('${r.id}','${r.name}',${r.userCount})">删除</button>
-                                <button class="secondary" onclick="adminAPI.kickRoom('${r.id}','${r.name}')">踢出用户</button>` : '<span class="admin-meta">默认房间</span>'}
-                            </div>
-                        </div>`).join('') || '<div class="admin-meta">暂无房间</div>';
+                    el.replaceChildren();
+                    for (const room of rooms) {
+                        const members = room.isPublic ? '所有用户自动加入' : `成员：${room.members.join('、') || '无'}`;
+                        const { row, actions } = this.row(room.name, `ID: ${room.id} | ${room.isPublic ? '公开' : '私有'} | ${room.userCount}人在线 | ${members}`);
+                        if (!room.isPublic) {
+                            this.button(actions, '邀请用户', () => this.inviteUser(room.id, room.name));
+                            this.button(actions, '移除受邀成员', () => this.kickRoom(room.id, room.name));
+                        }
+                        if (room.id !== 'default') this.button(actions, '删除', () => this.deleteRoom(room.id, room.name, room.userCount), 'danger');
+                        el.appendChild(row);
+                    }
+                    if (!rooms.length) el.textContent = '暂无可管理的房间';
                 } catch (e) { document.getElementById('admin-rooms-list').textContent = '❌ ' + e.message; }
+            },
+            async inviteUser(roomId, roomName) {
+                const username = prompt(`邀请已有账号加入私有房间「${roomName}」，请输入用户名：`);
+                if (!username || !username.trim()) return;
+                try {
+                    await this.request(`/api/rooms/${encodeURIComponent(roomId)}/invitations`, { method: 'POST', body: JSON.stringify({ username: username.trim() }) });
+                    this.loadRooms();
+                } catch (e) { alert('❌ ' + e.message); }
             },
             async createRoom() {
                 const roomId = document.getElementById('admin-room-id').value.trim();
                 const roomName = document.getElementById('admin-room-name').value.trim();
                 try {
-                    const r = await this.request('/api/rooms', { method: 'POST', body: JSON.stringify({ roomId, roomName }) });
+                    const r = await this.request('/api/rooms', { method: 'POST', body: JSON.stringify({ roomId, roomName, isPublic: document.getElementById('admin-room-visibility').value === 'public' }) });
                     alert('✅ ' + r.message);
                     this.loadRooms();
                 } catch (e) { alert('❌ ' + e.message); }
@@ -1463,7 +1524,7 @@
                 } catch (e) { alert('❌ ' + e.message); }
             },
             async kickRoom(roomId, roomName) {
-                if (!confirm(`确定踢出房间 "${roomName}" 中的所有用户？`)) return;
+                if (!confirm(`确定移除房间 "${roomName}" 中的所有受邀成员？房间创建者会保留。`)) return;
                 try {
                     const r = await this.request(`/api/rooms/${encodeURIComponent(roomId)}/kick-users`, { method: 'POST', body: '{}' });
                     alert('✅ ' + r.message);
@@ -1475,16 +1536,29 @@
                 try {
                     const accounts = await this.request('/api/accounts');
                     const el = document.getElementById('admin-accounts-list');
-                    el.innerHTML = accounts.map(a => `
-                        <div class="admin-item">
-                            <div><strong>${a.username}</strong> <span class="admin-meta">${a.role === 'admin' ? '👑管理员' : '普通用户'} | 注册IP: ${a.registeredIp || '-'}</span></div>
-                            <div>
-                                <button class="secondary" onclick="adminAPI.renameUser('${a.username}')">改名</button>
-                                <button class="secondary" onclick="adminAPI.resetPassword('${a.username}')">重置密码</button>
-                                <button class="danger" onclick="adminAPI.deleteUser('${a.username}')">删除</button>
-                            </div>
-                        </div>`).join('');
+                    el.replaceChildren();
+                    const me = window.chatApp;
+                    for (const account of accounts) {
+                        const roleName = { superadmin: '超级管理员', admin: '管理员', user: '普通用户' }[account.role];
+                        const { row, actions } = this.row(account.username, `${roleName} | 注册IP: ${account.registeredIp || '-'}`);
+                        const editable = me.userRole === 'superadmin' || account.role === 'user' || account.username === me.currentUser;
+                        if (editable) {
+                            this.button(actions, '改名', () => this.renameUser(account.username));
+                            this.button(actions, '重置密码', () => this.resetPassword(account.username));
+                        }
+                        if (me.userRole === 'superadmin' && account.role !== 'superadmin') {
+                            this.button(actions, account.role === 'admin' ? '取消管理员' : '设为管理员', () => this.setRole(account.username, account.role === 'admin' ? 'user' : 'admin'));
+                        }
+                        if (editable && account.role !== 'superadmin' && account.username !== me.currentUser) this.button(actions, '删除', () => this.deleteUser(account.username), 'danger');
+                        el.appendChild(row);
+                    }
                 } catch (e) { document.getElementById('admin-accounts-list').textContent = '❌ ' + e.message; }
+            },
+            async setRole(username, role) {
+                try {
+                    await this.request(`/api/users/${encodeURIComponent(username)}/role`, { method: 'PUT', body: JSON.stringify({ role }) });
+                    this.loadAccounts();
+                } catch (e) { alert('❌ ' + e.message); }
             },
             async renameUser(username) {
                 const newUsername = prompt(`将 "${username}" 改名为：`, username);
@@ -1517,7 +1591,7 @@
                     const el = document.getElementById('admin-online-list');
                     el.innerHTML = users.length ? users.map(u => `
                         <div class="admin-item">
-                            <div><strong>${u.username}</strong> <span class="admin-meta">IP: ${u.ip}${u.isMuted ? ' | <span class="muted-tag">已禁言</span>' : ''}</span></div>
+                            <div><strong>${window.chatApp.escapeHtml(u.username)}</strong> <span class="admin-meta">IP: ${u.ip}${u.isMuted ? ' | <span class="muted-tag">已禁言</span>' : ''}</span></div>
                             <div>
                                 <button class="danger" onclick="adminAPI.muteIPByIp('${u.ip}')" ${u.isMuted ? 'disabled' : ''}>禁言</button>
                                 <button class="success" onclick="adminAPI.unmuteIPByIp('${u.ip}')" ${!u.isMuted ? 'disabled' : ''}>解禁</button>

@@ -94,7 +94,7 @@ async function smoke() {
     assert.equal((await api('/api/me', { token: login.token })).username, 'onboarding');
     await api('/api/accounts', { token: login.token, status: 403 });
     const admin = await api('/api/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
-    assert.equal(admin.role, 'admin');
+    assert.equal(admin.role, 'superadmin');
     assert.ok((await api('/api/accounts', { token: admin.token })).some(u => u.username === 'onboarding'));
     console.log('PASS: registration, login, identity and administrator authorization');
     const { io } = require(path.join(repo, 'server/node_modules/socket.io/client-dist/socket.io.js'));
@@ -120,7 +120,7 @@ async function smoke() {
     const payload = 'BetterLanTalk onboarding upload\n';
     const uploaded = await api('/api/upload?room=default', { method: 'POST', token: login.token, body: payload, headers: { 'content-type': 'application/octet-stream', 'x-filename': 'onboarding.txt', 'x-mime': 'text/plain' } });
     assert.equal(uploaded.success, true);
-    const download = await fetch(base + uploaded.file.url);
+    const download = await fetch(base + uploaded.file.url, { headers: { authorization: 'Bearer ' + login.token } });
     assert.equal(download.status, 200);
     assert.equal(await download.text(), payload);
     assert.ok((await api('/api/files?room=default', { token: login.token })).some(f => f.storedName === uploaded.file.storedName));
@@ -130,9 +130,9 @@ async function smoke() {
     console.log('PASS: file upload, listing, exact download content and file message delivery');
     const room = await api('/api/rooms', { method: 'POST', token: admin.token, body: { roomId: 'smoke-room', roomName: 'Smoke room' } });
     assert.equal(room.room.id, 'smoke-room');
-    assert.ok((await api('/api/rooms')).some(r => r.id === 'smoke-room'));
-    await api('/api/rooms/smoke-room', { method: 'DELETE', token: admin.token });
-    assert.ok(!(await api('/api/rooms')).some(r => r.id === 'smoke-room'));
+    assert.ok((await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));
+    await api('/api/rooms/smoke-room?force=true', { method: 'DELETE', token: admin.token });
+    assert.ok(!(await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));
     await api('/api/logout', { method: 'POST', token: login.token });
     await api('/api/me', { token: login.token, status: 401 });
     console.log('PASS: room creation/deletion and logout invalidation');

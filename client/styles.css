@@ -1,12 +1,12 @@
 :root { color-scheme: light; --text: #24272c; --muted: #6b7280; --line: #dedfe2; --soft: #f5f5f5; }
 * { box-sizing: border-box; }
 body { margin: 0; padding: 16px; height: 100vh; height: 100dvh; display: flex; align-items: center; justify-content: center; background: #f3f3f3; color: var(--text); font: 14px/1.5 system-ui, 'Microsoft YaHei', sans-serif; }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { padding: 6px 12px; border: 1px solid var(--line); border-radius: 4px; background: white; color: var(--text); cursor: pointer; }
 button:hover { background: #ededed; }
 button:disabled { opacity: .5; cursor: not-allowed; }
-button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible { outline: 2px solid #6b7280; outline-offset: 2px; }
-input:not([type=checkbox]), textarea { border: 1px solid var(--line); border-radius: 4px; background: white; color: var(--text); padding: 9px 10px; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid #6b7280; outline-offset: 2px; }
+input:not([type=checkbox]), textarea, select { border: 1px solid var(--line); border-radius: 4px; background: white; color: var(--text); padding: 9px 10px; }
 input[type=checkbox] { width: auto; margin-right: 6px; accent-color: #374151; }
 h1, h2, h3, p { margin: 0; }
 a { color: #374151; }
@@ -108,7 +108,7 @@ a { color: #374151; }
 .help-close { float: right; }
 .admin-section { padding: 16px; margin-bottom: 14px; background: white; border: 1px solid var(--line); border-radius: 4px; }
 .admin-section h3 { font-size: 15px; margin-bottom: 10px; }
-.admin-section input, .admin-section textarea { margin: 4px 0; max-width: 100%; }
+.admin-section input, .admin-section textarea, .admin-section select { margin: 4px 0; max-width: 100%; }
 .admin-section button { margin: 2px; font-size: 12px; }
 .admin-section button.danger, .muted-tag { color: #9f3434; }
 .admin-item { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; padding: 10px; margin-top: 6px; background: #fafafa; }
