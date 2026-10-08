@@ -1,6 +1,6 @@
 {
   "name": "better-lantalk",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "内网聊天室：在 LanTalk 基础上增强的二次开发版",
   "main": "server.js",
   "scripts": {
