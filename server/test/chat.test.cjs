@@ -6,6 +6,7 @@ const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { test } = require('node:test');
+const { request, sourceFor } = require('./network.cjs');
 const repo = path.resolve(__dirname, '../..');
 
 async function readiness(base) {
@@ -19,7 +20,7 @@ async function readiness(base) {
   assert.equal(info.status, 'running');
   assert.equal(info.version, '1.1.1');
   for (const route of ['/', '/client/index.html', '/socket.io/socket.io.js', '/client/login.js', '/client/login.css']) {
-    const r = await fetch(base + route, { signal: AbortSignal.timeout(3000) });
+    const r = await request(base + route, { signal: AbortSignal.timeout(3000) });
     assert.equal(r.status, 200, route);
     const content = await r.text();
     assert.ok(content.length > 100, route);
@@ -77,7 +78,8 @@ async function smoke() {
     assert.ok(ready, 'Server startup');
     console.log('PASS: startup, health, HTML and locally served Socket.IO');
     async function api(route, { method = 'GET', token, body, status = 200, headers = {} } = {}) {
-      const r = await fetch(base + route, {
+      const r = await request(base + route, {
+        localAddress: sourceFor(workdir, token, typeof body === 'object' ? body?.username : undefined),
         method,
         headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(body && typeof body !== 'string' ? { 'content-type': 'application/json' } : {}), ...headers },
         body: body && (typeof body === 'string' ? body : JSON.stringify(body)),
@@ -99,7 +101,7 @@ async function smoke() {
     console.log('PASS: registration, login, identity and administrator authorization');
     const { io } = require(path.join(repo, 'server/node_modules/socket.io/client-dist/socket.io.js'));
     for (const token of [login.token, admin.token]) {
-      const socket = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false });
+      const socket = io(base, { transports: ['websocket'], query: { sourceIp: sourceFor(workdir, token) }, autoConnect: false, reconnection: false });
       sockets.push(socket);
       const connected = event(socket, 'connect');
       socket.connect();
@@ -120,7 +122,7 @@ async function smoke() {
     const payload = 'BetterLanTalk onboarding upload\n';
     const uploaded = await api('/api/upload?room=default', { method: 'POST', token: login.token, body: payload, headers: { 'content-type': 'application/octet-stream', 'x-filename': 'onboarding.txt', 'x-mime': 'text/plain' } });
     assert.equal(uploaded.success, true);
-    const download = await fetch(base + uploaded.file.url, { headers: { authorization: 'Bearer ' + login.token } });
+    const download = await request(base + uploaded.file.url, { localAddress: sourceFor(workdir, login.token), headers: { authorization: 'Bearer ' + login.token } });
     assert.equal(download.status, 200);
     assert.equal(await download.text(), payload);
     assert.ok((await api('/api/files?room=default', { token: login.token })).some(f => f.storedName === uploaded.file.storedName));

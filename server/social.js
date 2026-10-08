@@ -1,7 +1,7 @@
 // Social data uses immutable account IDs; usernames remain display labels.
 module.exports = function attachSocial({ app, authMiddleware, adminMiddleware, userStore, social, saveSocial,
     rooms, messages, saveRooms, saveMessages, accountById, areFriends, canAccessRoom, canManageRoom,
-    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, isIPv4, sendJiyuPopup }) {
+    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, notifyJiyu }) {
     const publicUser = account => ({ id: account.id, username: account.username,
         online: [...users.values()].some(user => user.id === account.id) });
     function socialInfo(account) {
@@ -114,26 +114,16 @@ module.exports = function attachSocial({ app, authMiddleware, adminMiddleware, u
         if (index < 0) return res.status(400).json({ error: '历史游标无效' });
         res.json(history.slice(0, index).slice(-100));
     });
-    // Addresses are explicitly assigned by administrators to authorized classroom devices.
-    const validDeviceIp = ip => isIPv4(ip) && (/^(10\.|192\.168\.|127\.)/.test(ip) || /^172\.(1[6-9]|2\d|3[01])\./.test(ip));
-    app.get('/api/jiyu/devices', adminMiddleware, (req, res) => res.json(social.devices.map(device => ({ ...device, username: accountById(device.userId)?.username }))));
-    app.put('/api/jiyu/devices/:userId', adminMiddleware, (req, res) => {
-        if (!accountById(req.params.userId)) return res.status(404).json({ error: '用户不存在' });
-        const ips = req.body.ips;
-        if (!Array.isArray(ips) || ips.length > 5 || ips.some(ip => typeof ip !== 'string' || !validDeviceIp(ip)))
-            return res.status(400).json({ error: '最多绑定5个明确的内网 IPv4 地址' });
-        if (social.devices.some(device => device.userId !== req.params.userId && ips.includes(device.ip)))
-            return res.status(409).json({ error: '该设备已绑定另一账号，请先解除原绑定' });
-        social.devices = social.devices.filter(device => device.userId !== req.params.userId);
-        social.devices.push(...[...new Set(ips)].map(ip => ({ userId: req.params.userId, ip })));
-        saveSocial(); res.json({ success: true });
-    });
+    // Notification destinations are the account's fixed login IP, exposed read-only.
+    app.get('/api/jiyu/devices', adminMiddleware, (req, res) => res.json(userStore.users.map(account => ({
+        userId: account.id, username: account.username, ip: account.boundIp || ''
+    }))));
     app.post('/api/jiyu/test', adminMiddleware, (req, res) => {
-        const device = social.devices.find(device => device.ip === req.body.ip);
-        if (!device) return res.status(400).json({ error: '请先将此设备绑定到账号' });
-        sendJiyuPopup([device.ip], config.jiyuPort, 'new message', (error, result) => {
+        const account = req.body.userId ? accountById(req.body.userId) : userStore.users.find(account => account.boundIp === req.body.ip);
+        if (!account?.boundIp) return res.status(400).json({ error: '目标账号尚未关联设备 IP' });
+        notifyJiyu([account.boundIp], config.jiyuPort, { username: req.auth.username, type: 'text' }, (error, result) => {
             res.status(error ? 502 : 200).json({ success: !error, ...result,
-                message: error ? 'UDP 发送失败' : 'UDP 已发送；是否显示弹窗需在目标设备确认' });
+                message: error ? 'UDP 发送失败' : result.skipped ? '设备处于 20 秒冷却期，本次提醒已忽略' : 'UDP 已发送；是否显示弹窗需在目标设备确认' });
         });
     });
     return socialChanged;

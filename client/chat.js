@@ -797,7 +797,7 @@ Object.assign(ChatApp.prototype, {
         document.getElementById('device-btn').onclick = async () => {
             try {
                 const data = await this.request('/api/my-notification-devices');
-                this.showToast(data.enabled ? ('极域通知设备：' + (data.ips.join('、') || '尚未绑定，请联系管理员')) : '极域通知尚未开启，请联系管理员');
+                this.showToast(data.enabled ? ('极域通知设备：' + (data.ips.join('、') || '尚未关联 IP，请重新登录')) : '极域通知尚未开启，请联系管理员');
             } catch(error) { this.showToast(error.message); }
         };
     },

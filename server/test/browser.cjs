@@ -6,6 +6,7 @@ const { once } = require('node:events');
 const { spawn } = require('node:child_process');
 const assert = require('node:assert/strict');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright');
+const { sourceProxy } = require('./network.cjs');
 const repo = path.resolve(__dirname, '../..');
 const artifactDir = process.env.BROWSER_ARTIFACT_DIR || path.join(os.tmpdir(), 'betterlantalk-browser-artifacts');
 fs.mkdirSync(artifactDir, { recursive: true });
@@ -16,11 +17,13 @@ fs.mkdirSync(artifactDir, { recursive: true });
  fs.symlinkSync(path.join(repo,'client'),path.join(root,'client'),'dir');
  fs.symlinkSync(path.join(repo,'server/node_modules'),path.join(server,'node_modules'),'dir');
  const probe=net.createServer();probe.listen(0,'127.0.0.1');await once(probe,'listening');const port=probe.address().port;await new Promise(r=>probe.close(r));
- const base='http://127.0.0.1:'+port;
+ const serverBase='http://127.0.0.1:'+port; let userProxy, adminProxy;
  const child=spawn(process.execPath,['server.js'],{cwd:server,env:{...process.env,PORT:String(port),LANTALK_OPEN_BROWSER:'0'},stdio:['ignore','ignore','pipe']});
  let browser; let serverErrors = ''; child.stderr.on('data', data => serverErrors += data);
  try {
-  for(let i=0;i<100;i++){try{if((await fetch(base+'/api/health')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+  for(let i=0;i<100;i++){try{if((await fetch(serverBase+'/api/health')).ok)break;}catch{}await new Promise(r=>setTimeout(r,100));}
+  userProxy=await sourceProxy(port,'127.0.0.3');adminProxy=await sourceProxy(port,'127.0.0.2');
+  const base=userProxy.url, adminBase=adminProxy.url;
   browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE_PATH || undefined,headless:true,args:['--no-sandbox']});
   const context=await browser.newContext({viewport:{width:1440,height:1000},permissions:['clipboard-read','clipboard-write']});
   const page=await context.newPage(); const errors=[];
@@ -113,7 +116,7 @@ fs.mkdirSync(artifactDir, { recursive: true });
   const adminContext=await browser.newContext({viewport:{width:1440,height:1000}});
   const adminPage=await adminContext.newPage();adminPage.on('pageerror',e=>errors.push(e.message));
   adminPage.on('dialog',dialog=>dialog.accept());
-  await adminPage.goto(base);await adminPage.fill('#username-input','admin');await adminPage.fill('#password-input','admin123');await adminPage.click('#auth-button');
+  await adminPage.goto(adminBase);await adminPage.fill('#username-input','admin');await adminPage.fill('#password-input','admin123');await adminPage.click('#auth-button');
   await adminPage.waitForFunction(()=>window.chatApp?.isConnected && window.chatApp.userRole==='superadmin');
   await page.fill('#people-search','admin');await page.locator('#people-search-form button').click();
   await page.locator('#people-results button:has-text("加好友")').click();
@@ -131,6 +134,12 @@ fs.mkdirSync(artifactDir, { recursive: true });
   await adminPage.fill('#admin-room-id','browser-public');await adminPage.fill('#admin-room-name','公开群');await adminPage.selectOption('#admin-room-visibility','public');
   await adminPage.getByRole('button',{name:'创建房间',exact:true}).click();
   await adminPage.locator('#admin-rooms-list .admin-item:has-text("browser-public")').waitFor();
+  await adminPage.locator('#jiyu-devices .admin-item:has-text("browser-test")').waitFor();
+  assert.ok((await adminPage.locator('#jiyu-devices').textContent()).includes('127.0.0.3'));
+  assert.equal(await adminPage.getByRole('button',{name:'绑定设备',exact:true}).count(),0);
+  const userToken=await page.evaluate(()=>window.chatApp.authToken);
+  const wrongDevice=await adminContext.request.get(adminBase+'/client/chat.js',{headers:{Authorization:'Bearer '+userToken}});
+  assert.equal(wrongDevice.status(),403);
   assert.equal(await page.locator('.room-item:has-text("公开群")').count(),0);
   await page.click('#discover-btn');await page.locator('#discover-panel .action-row:has-text("公开群") button').click();
   await page.waitForFunction(()=>window.chatApp.currentRoom==='browser-public');
@@ -184,9 +193,11 @@ fs.mkdirSync(artifactDir, { recursive: true });
   assert.equal(await page.locator('#conversation-sidebar').isVisible(),true);assert.equal(await page.locator('#chat-details').isVisible(),true);
   console.log('PASS: 960x1080 half-screen, 540x960 and 720x1280 portrait layouts, narrow bubbles, split panes, drawer navigation, member list and Ctrl+Enter send');
   assert.deepEqual(errors,[]);
+  console.log('PASS: fixed account IPs, no manual device binding UI, and cross-IP browser token rejection');
   console.log('PASS: browser preview/server parity, Luogu features, real Ctrl+V PNG, file download, toolbar, undo/redo, scroll sync, friends/request acceptance/DM, separate admin page, explicit public group join, live roles and read-only history after deleting a friend');
  } catch (error) { if (serverErrors) console.error(serverErrors); throw error; } finally {
   if(browser)await browser.close();
+  if(userProxy)await userProxy.close();if(adminProxy)await adminProxy.close();
   const stopped=once(child,'exit');child.kill('SIGINT');await stopped;fs.rmSync(root,{recursive:true,force:true});
  }
 })().catch(e=>{console.error(e);process.exitCode=1;});

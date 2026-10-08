@@ -32,7 +32,7 @@ test('social migration, friendships, private conversations and resource authoriz
     await api('/client/vendor%2f..%2fadmin.js', alice.token, { status: 400 });
     const chat = await api('/chat', alice.token); assert.ok(!chat.includes('adminAPI')); assert.ok(!chat.includes('admin-accounts-list'));
     const source = await api('/client/chat.js', alice.token); assert.ok(!source.includes('resetPassword')); assert.ok(!source.includes('/api/config'));
-    const header = await fetch(f.base + '/client/admin.js', { headers: { authorization: 'Bearer ' + admin.token } }); assert.equal(header.headers.get('cache-control'), 'no-store');
+    const header = await f.request('/client/admin.js', admin.token); assert.equal(header.headers.get('cache-control'), 'no-store');
   });
   await t.test('legacy public access is preserved and new accounts join default only', async () => {
     assert.ok((await api('/api/rooms', alice.token)).some(room => room.id === 'legacy'));
@@ -113,38 +113,36 @@ test('social migration, friendships, private conversations and resource authoriz
   });
 });
 
-test('Jiyu uses explicit device bindings and fixed texts, skipping active readers and revoked members', { timeout: 15000 }, async t => {
+
+test('Jiyu automatically uses fixed account IPs and drops messages in cooldown while chat delivery continues', { timeout: 15000 }, async t => {
   const f = await fixture(seed()); t.after(f.cleanup);
-  const udp = dgram.createSocket('udp4'); udp.bind(0, '127.0.0.1'); await once(udp, 'listening'); t.after(() => udp.close());
+  const udp = dgram.createSocket('udp4'); udp.bind(0, '0.0.0.0'); await once(udp, 'listening'); t.after(() => udp.close());
   const packets = []; udp.on('message', packet => packets.push(packet));
   const auth = {};
-  for (const name of ['admin', 'alice', 'bob']) {
+  for (const name of ['admin', 'alice', 'bob', 'charlie']) {
     const user = await f.api('/api/login', null, { method: 'POST', body: { username: name, password } });
     auth[name] = { ...user, ...(await f.api('/api/me', user.token)), token: user.token };
   }
-  const { admin, alice, bob } = auth;
+  const { admin, alice, bob, charlie } = auth;
   assert.equal((await f.api('/api/config', admin.token)).jiyuEnabled, false);
-  await f.api('/api/jiyu/devices/' + bob.id, alice.token, { method: 'PUT', body: { ips: ['127.0.0.1'] }, status: 403 });
-  await f.api('/api/jiyu/devices/' + bob.id, admin.token, { method: 'PUT', body: { ips: ['999.2.3.4'] }, status: 400 });
-  await f.api('/api/jiyu/devices/' + bob.id, admin.token, { method: 'PUT', body: { ips: ['127.0.0.1'] } });
-  await f.api('/api/jiyu/devices/' + alice.id, admin.token, { method: 'PUT', body: { ips: ['127.0.0.1'] }, status: 409 });
+  const devices = await f.api('/api/jiyu/devices', admin.token); assert.equal(devices.find(device => device.userId === bob.id).ip, bob.boundIp);
+  await f.api('/api/jiyu/devices/' + bob.id, admin.token, { method: 'PUT', body: { ips: ['127.0.0.9'] }, status: 404 });
   await f.api('/api/config', admin.token, { method: 'PUT', body: { jiyuPort: udp.address().port, jiyuEnabled: true } });
-  await f.api('/api/config', admin.token, { method: 'PUT', body: { jiyuPort: 1.2 }, status: 400 });
-  const a = await f.connect(alice.token), b = await f.connect(bob.token);
+  const a = await f.connect(alice.token), b = await f.connect(bob.token), c = await f.connect(charlie.token), ad = await f.connect(admin.token);
   const pause = () => new Promise(resolve => setTimeout(resolve, 90));
+  for (const socket of [b,c,ad]) socket.emit('client_state', { isViewing: true }); await pause();
   async function send(content) { const delivered = receive(b, 'message', msg => msg.content === content); a.emit('send_message', { content, roomId: 'default' }); await delivered; await pause(); }
-  b.emit('client_state', { isViewing: true }); await pause(); await send('active reader'); assert.equal(packets.length, 0);
-  b.emit('client_state', { isViewing: false }); await pause(); await send('private details must not appear');
-  assert.equal(packets[0].subarray(56).toString('utf16le').replace(/\0.*$/s, ''), 'new message');
-  for (const [mime, expected] of [['text/plain', 'new flie'], ['image/png', 'new picture']]) {
-    const file = (await f.api('/api/upload?room=default', alice.token, { method: 'POST', body: 'payload', headers: { 'content-type': 'application/octet-stream', 'x-filename': 'secret-name', 'x-mime': mime } })).file;
-    const delivered = receive(b, 'message', msg => msg.storedName === file.storedName); a.emit('send_file', { storedName: file.storedName }); await delivered; await pause();
-    assert.equal(packets.at(-1).subarray(56).toString('utf16le').replace(/\0.*$/s, ''), expected);
-  }
-  b.disconnect(); await pause(); const popup = once(udp, 'message'); a.emit('send_message', { content: 'browser closed' }); await popup;
+  await send('active readers'); assert.equal(packets.length, 0);
+  b.emit('client_state', { isViewing: false }); await pause(); await send('private details');
+  assert.equal(packets.length, 1); assert.equal(packets[0].subarray(56).toString('utf16le').replace(/\0.*$/s, ''), 'from alice: new message');
+  await send('same device and room must be ignored'); assert.equal(packets.length, 1);
+  const file = (await f.api('/api/upload?room=default', alice.token, { method: 'POST', body: 'payload', headers: { 'content-type': 'application/octet-stream', 'x-filename': 'secret-name', 'x-mime': 'image/png' } })).file;
+  const delivered = receive(b, 'message', msg => msg.storedName === file.storedName); a.emit('send_file', { storedName: file.storedName }); await delivered; await pause(); assert.equal(packets.length, 1);
+  const skipped = await f.api('/api/jiyu/test', admin.token, { method: 'POST', body: { userId: bob.id } }); assert.equal(skipped.sent, 0); assert.equal(skipped.skipped, 1); assert.match(skipped.message, /冷却/);
+  c.disconnect(); await pause(); await send('closed browser on a different device'); assert.equal(packets.length, 2);
   await f.api('/api/rooms', admin.token, { method: 'POST', body: { roomId: 'unjoined', isPublic: true } });
-  const adminSocket = await f.connect(admin.token); const before = packets.length;
-  adminSocket.emit('send_message', { roomId: 'unjoined', content: 'must not notify nonmembers' }); await pause(); assert.equal(packets.length, before);
+  ad.emit('send_message', { roomId: 'unjoined', content: 'must not notify nonmembers' }); await pause(); assert.equal(packets.length, 2);
   await f.api('/api/jiyu/test', admin.token, { method: 'POST', body: { ip: '192.168.1.2' }, status: 400 });
-  const result = await f.api('/api/jiyu/test', admin.token, { method: 'POST', body: { ip: '127.0.0.1' } }); assert.equal(result.sent, 1); assert.match(result.message, /需在目标设备确认/);
+  const result = await f.api('/api/jiyu/test', admin.token, { method: 'POST', body: { userId: alice.id } }); assert.equal(result.sent, 1); assert.match(result.message, /需在目标设备确认/); await pause();
+  assert.equal(packets.at(-1).subarray(56).toString('utf16le').replace(/\0.*$/s, ''), 'from admin: new message');
 });

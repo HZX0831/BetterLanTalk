@@ -7,7 +7,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { isIPv4 } = require('net');
-const { sendJiyuPopup, formatJiyuMessage } = require('./jiyu');
+const { createJiyuNotifier } = require('./jiyu');
+const notifyJiyu = createJiyuNotifier();
 const { exec } = require('child_process');
 
 // 预览与消息共用新版 Luogu Markdown 解析器。
@@ -104,6 +105,7 @@ let userStore = loadJSON(USERS_FILE, null) || { users: [], tokens: {} };
 if (Array.isArray(userStore.users) && userStore.users.some(user => !user.id)) {
     for (const file of [USERS_FILE, ROOMS_FILE]) if (fs.existsSync(file) && !fs.existsSync(file + '.pre-social.bak')) fs.copyFileSync(file, file + '.pre-social.bak');
 }
+if (Array.isArray(userStore.users) && userStore.users.some(user => typeof user.boundIp !== 'string') && fs.existsSync(USERS_FILE) && !fs.existsSync(USERS_FILE + '.pre-ip.bak')) fs.copyFileSync(USERS_FILE, USERS_FILE + '.pre-ip.bak');
 if (!Array.isArray(userStore.users)) userStore.users = [];
 if (typeof userStore.tokens !== 'object' || !userStore.tokens) userStore.tokens = {};
 
@@ -122,6 +124,7 @@ function addUser(username, password, role, registeredIp) {
         passwordHash: hashPassword(password, salt),
         role,
         registeredIp: registeredIp || '',
+        boundIp: registeredIp || '',
         createdAt: Date.now()
     };
     userStore.users.push(user);
@@ -136,7 +139,7 @@ function createToken(username, role) {
     return token;
 }
 
-function getUserByToken(token) {
+function getUserByToken(token, ip) {
     if (!token) return null;
     const t = userStore.tokens[token];
     if (!t) return null;
@@ -146,12 +149,31 @@ function getUserByToken(token) {
         return null;
     }
     const account = userStore.users.find(u => u.username === t.username);
-    if (!account) return null;
-    return { id: account.id, username: account.username, role: account.role };
+    if (!account || (ip !== undefined && accountIpError(account, ip))) return null;
+    return { id: account.id, username: account.username, role: account.role, boundIp: account.boundIp };
 }
 
+function normalizeIp(ip) {
+    return String(ip || '').replace(/^::ffff:/i, '');
+}
 function clientIpOf(req) {
-    return (req.socket && req.socket.remoteAddress || '').replace('::ffff:', '');
+    // Direct peer only: an untrusted forwarding header cannot change account identity.
+    return normalizeIp(req.socket?.remoteAddress);
+}
+function accountIpError(account, ip) {
+    ip = normalizeIp(ip);
+    if (!account.boundIp) return '账号尚未关联设备 IP，请重新登录';
+    if (account.boundIp !== ip) return '该账号只能从已关联的设备 IP 登录';
+    if (userStore.users.some(other => other.id !== account.id && other.boundIp === ip)) return '此设备 IP 已关联其他账号';
+    return null;
+}
+function bindLoginIp(account, ip) {
+    ip = normalizeIp(ip);
+    if (!ip) return '无法识别设备 IP';
+    if (userStore.users.some(other => other.id !== account.id && other.boundIp === ip)) return '此设备 IP 已关联其他账号';
+    if (account.boundIp && account.boundIp !== ip) return '该账号只能从已关联的设备 IP 登录';
+    if (!account.boundIp) { account.boundIp = ip; saveUsers(); }
+    return null;
 }
 
 function requestToken(req) {
@@ -167,6 +189,8 @@ function authMiddleware(req, res, next) {
     const token = requestToken(req);
     const auth = getUserByToken(token);
     if (!auth) return res.status(401).json({ error: '未登录或登录已过期' });
+    const ipError = accountIpError(auth, clientIpOf(req));
+    if (ipError) return res.status(403).json({ error: ipError });
     req.auth = auth;
     req.authToken = token;
     next();
@@ -192,10 +216,15 @@ if (!userStore.users.length) {
     const initial = userStore.users.find(u => u.role === 'admin') || userStore.users[0];
     initial.role = 'superadmin';
 }
-for (const account of userStore.users) if (!account.id) account.id = crypto.randomUUID();
+for (const account of userStore.users) {
+    if (!account.id) account.id = crypto.randomUUID();
+    // Ordinary users retain their registration IP; superadmin binds on first successful login.
+    if (typeof account.boundIp !== 'string') account.boundIp = account.role === 'superadmin' ? '' : normalizeIp(account.registeredIp);
+    account.boundIp = normalizeIp(account.boundIp);
+}
 saveUsers();
-const social = loadJSON(SOCIAL_FILE, { friends: [], requests: [], devices: [] });
-for (const key of ['friends', 'requests', 'devices']) if (!Array.isArray(social[key])) social[key] = [];
+const social = loadJSON(SOCIAL_FILE, { friends: [], requests: [] });
+for (const key of ['friends', 'requests']) if (!Array.isArray(social[key])) social[key] = [];
 const accountById = id => userStore.users.find(account => account.id === id);
 const accountId = name => userStore.users.find(account => account.username === name)?.id;
 const areFriends = (a, b) => social.friends.some(pair => pair.includes(a) && pair.includes(b));
@@ -341,7 +370,7 @@ function visibleRooms(account, managing = false) {
 }
 function socketUser(socket) {
     const user = users.get(socket.id);
-    const account = getUserByToken(socket.data.token);
+    const account = getUserByToken(socket.data.token, socket.handshake.address);
     if (!user || !account) return null;
     user.id = account.id;
     user.username = account.username;
@@ -390,7 +419,7 @@ function roomCreationError(account, data) {
 }
 function broadcastRoomList() {
     for (const socket of io.sockets.sockets.values()) {
-        const account = getUserByToken(socket.data.token);
+        const account = getUserByToken(socket.data.token, socket.handshake.address);
         socket.emit('room_list', visibleRooms(account));
     }
 }
@@ -456,7 +485,7 @@ saveMessages();
 // Separate pages; protected sources are never part of the login response.
 app.get('/', (req, res) => {
     res.set('Cache-Control', 'no-store');
-    if (getUserByToken(requestToken(req))) return res.redirect('/chat');
+    if (getUserByToken(requestToken(req), clientIpOf(req))) return res.redirect('/chat');
     res.sendFile(path.join(clientDir, 'index.html'));
 });
 app.get('/chat', authMiddleware, (req, res) => {
@@ -488,7 +517,7 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-app.get('/api/my-notification-devices', authMiddleware, (req, res) => res.json({ enabled: config.jiyuEnabled, ips: social.devices.filter(device => device.userId === req.auth.id).map(device => device.ip) }));
+app.get('/api/my-notification-devices', authMiddleware, (req, res) => res.json({ enabled: config.jiyuEnabled, ips: req.auth.boundIp ? [req.auth.boundIp] : [] }));
 
 app.get('/api/users', adminMiddleware, (req, res) => {
     const userList = Array.from(users.values()).map(user => ({
@@ -540,8 +569,8 @@ app.post('/api/register', (req, res) => {
         return res.status(400).json({ error: '用户名已存在' });
     }
     const ip = clientIpOf(req);
-    if (ip && userStore.users.some(u => u.registeredIp && u.registeredIp === ip)) {
-        return res.status(403).json({ error: '该IP已注册过账号，每个IP仅限注册一个用户' });
+    if (ip && userStore.users.some(u => u.boundIp === ip)) {
+        return res.status(403).json({ error: '此设备 IP 已关联其他账号，每个 IP 只能使用一个账号' });
     }
     const account = addUser(username, password, 'user', ip);
     rooms.get('default').memberIds.push(account.id);
@@ -562,6 +591,8 @@ app.post('/api/login', (req, res) => {
     if (!user || user.passwordHash !== hashPassword(password, user.salt)) {
         return res.status(401).json({ error: '用户名或密码错误' });
     }
+    const ipError = bindLoginIp(user, clientIpOf(req));
+    if (ipError) return res.status(403).json({ error: ipError });
     const token = createToken(user.username, user.role);
     console.log(`用户登录: ${user.username} (${user.role})`);
     sessionCookie(req, res, token);
@@ -571,7 +602,7 @@ app.post('/api/login', (req, res) => {
 app.get('/api/me', authMiddleware, (req, res) => {
     sessionCookie(req, res, req.authToken);
     const user = userStore.users.find(u => u.username === req.auth.username);
-    res.json({ id: user.id, username: req.auth.username, role: user ? user.role : req.auth.role, token: req.authToken });
+    res.json({ id: user.id, username: req.auth.username, role: user ? user.role : req.auth.role, boundIp: user.boundIp, token: req.authToken });
 });
 
 app.post('/api/logout', authMiddleware, (req, res) => {
@@ -591,6 +622,7 @@ app.get('/api/accounts', adminMiddleware, (req, res) => {
         username: u.username,
         role: u.role,
         registeredIp: u.registeredIp,
+        boundIp: u.boundIp,
         createdAt: u.createdAt
     })));
 });
@@ -657,7 +689,6 @@ app.delete('/api/users/:username', adminMiddleware, (req, res) => {
     syncRoomSubscriptions();
     social.friends = social.friends.filter(pair => !pair.includes(user.id));
     social.requests = social.requests.filter(request => request.from !== user.id && request.to !== user.id);
-    social.devices = social.devices.filter(device => device.userId !== user.id);
     saveSocial(); socialChanged();
     console.log(`管理员删除账号: ${user.username}`);
     res.json({ success: true, message: `用户 ${user.username} 已删除` });
@@ -903,7 +934,7 @@ app.post('/api/broadcast', adminMiddleware, (req, res) => {
     const adminMessage = {
         id: generateId(),
         type: 'admin',
-        username: '管理员',
+        username: req.auth.username,
         content: message,
         timestamp: Date.now()
     };
@@ -988,14 +1019,14 @@ app.get('/api/rooms', authMiddleware, (req, res) => {
 
 const socialChanged = require('./social')({ app, authMiddleware, adminMiddleware, userStore, social, saveSocial,
     rooms, messages, saveRooms, saveMessages, accountById, areFriends, canAccessRoom, canManageRoom,
-    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, isIPv4, sendJiyuPopup });
+    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, notifyJiyu });
 function notifyJiyuRoom(room, senderId, message) {
     if (!config.jiyuEnabled || !room) return;
     const recipients = room.memberIds.filter(id => id !== senderId && ![...users.values()].some(user =>
         user.id === id && user.currentRoom === room.id && user.isViewing));
-    const ips = social.devices.filter(device => recipients.includes(device.userId)).map(device => device.ip);
+    const ips = recipients.map(id => accountById(id)?.boundIp).filter(ip => isIPv4(ip));
     if (!ips.length) return;
-    sendJiyuPopup(ips, config.jiyuPort, formatJiyuMessage(message), (error, result) => {
+    notifyJiyu(ips, config.jiyuPort, message, (error, result) => {
         if (error) console.error('极域 UDP 发送失败:', result);
     });
 }
@@ -1042,6 +1073,8 @@ io.on('connection', (socket) => {
         const { token = requestToken({ headers: socket.request.headers }), roomId = 'default' } = data || {};
         const auth = getUserByToken(token);
         if (!auth) return socket.emit('error', '登录已过期，请重新登录');
+        const ipError = accountIpError(auth, clientIP);
+        if (ipError) return socket.emit('error', ipError);
         const room = rooms.get(roomId);
         if (!canAccessRoom(auth, room)) return socket.emit('error', '房间不存在或未获邀请');
         clearTimeout(socket.data.expiryTimer);

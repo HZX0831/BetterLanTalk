@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const { once } = require('node:events');
 const { test } = require('node:test');
 const repo = path.resolve(__dirname, '../..');
+const { request, sourceFor } = require('./network.cjs');
 const { io } = require('../node_modules/socket.io/client-dist/socket.io.js');
 
 function receive(socket, name, matches = () => true) {
@@ -54,7 +55,8 @@ test('persistent room membership and live administrator permissions', { timeout:
     }
   }
   async function api(route, token, { method = 'GET', body, status = 200, headers = {} } = {}) {
-    const response = await fetch(base + route, {
+    const response = await request(base + route, {
+      localAddress: sourceFor(dir, token, typeof body === 'object' ? body?.username : undefined),
       method, headers: { ...(token ? { authorization: 'Bearer ' + token } : {}), ...(body && typeof body !== 'string' ? { 'content-type': 'application/json' } : {}), ...headers },
       body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body)
     });
@@ -62,7 +64,7 @@ test('persistent room membership and live administrator permissions', { timeout:
     return response.json();
   }
   async function connect(token) {
-    const socket = io(base, { transports: ['websocket'], autoConnect: false, reconnection: false }); sockets.push(socket);
+    const socket = io(base, { transports: ['websocket'], query: { sourceIp: sourceFor(dir, token) }, autoConnect: false, reconnection: false }); sockets.push(socket);
     const connected = receive(socket, 'connect'); socket.connect(); await connected;
     const joined = receive(socket, 'room_joined'); socket.emit('join', { token }); await joined;
     return socket;
@@ -136,7 +138,7 @@ test('persistent room membership and live administrator permissions', { timeout:
       await api('/api/rooms/private-team/invitations', manager.token, { method: 'POST', body: { username: 'outsider' } }); await visible;
       const history = receive(o, 'message_history', list => list.some(msg => msg.content === 'secret'));
       o.emit('join_room', { roomId: 'private-team' }); await history;
-      const download = await fetch(base + uploaded.file.url, { headers: { authorization: 'Bearer ' + outsider.token } });
+      const download = await request(base + uploaded.file.url, { localAddress: sourceFor(dir, outsider.token), headers: { authorization: 'Bearer ' + outsider.token } });
       assert.equal(await download.text(), 'private file');
       await rejected(o, 'send_file', { roomId: 'default', storedName: uploaded.file.storedName }, /不能转发/);
       await rejected(o, 'send_file', { roomId: 'private-team', storedName: uploaded.file.storedName }, /不能转发/);

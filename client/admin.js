@@ -170,7 +170,7 @@
                     const me = window.chatApp;
                     for (const account of accounts) {
                         const roleName = { superadmin: '超级管理员', admin: '管理员', user: '普通用户' }[account.role];
-                        const { row, actions } = this.row(account.username, `${roleName} | 注册IP: ${account.registeredIp || '-'}`);
+                        const { row, actions } = this.row(account.username, `${roleName} | 关联IP: ${account.boundIp || '尚未首次登录'}`);
                         const editable = me.userRole === 'superadmin' || account.role === 'user' || account.username === me.currentUser;
                         if (editable) {
                             this.button(actions, '改名', () => this.renameUser(account.username));
@@ -286,20 +286,12 @@
             },
             async loadDevices() {
                 try {
-                    const [accounts, devices] = await Promise.all([this.request('/api/accounts'), this.request('/api/jiyu/devices')]);
+                    const devices = await this.request('/api/jiyu/devices');
                     const container = document.getElementById('jiyu-devices'); container.replaceChildren();
-                    for (const account of accounts) {
-                        const ips = devices.filter(d => d.userId === account.id).map(d => d.ip);
-                        const { row, actions } = this.row(account.username, ips.join('、') || '未绑定设备');
-                        this.button(actions, '绑定设备', async () => {
-                            const value = prompt('输入此账号使用的已授权内网设备 IPv4 地址，多个用逗号分隔；留空解除绑定', ips.join(','));
-                            if (value === null) return;
-                            try { await this.request('/api/jiyu/devices/' + encodeURIComponent(account.id), {
-                                method: 'PUT', body: JSON.stringify({ ips: value.split(',').map(v => v.trim()).filter(Boolean) })
-                            }); this.loadDevices(); } catch(e) { alert(e.message); }
-                        });
-                        for (const ip of ips) this.button(actions, '测试 ' + ip, async () => {
-                            try { const result = await this.request('/api/jiyu/test', { method: 'POST', body: JSON.stringify({ ip }) }); alert(result.message); }
+                    for (const device of devices) {
+                        const { row, actions } = this.row(device.username, device.ip || '尚未首次登录，无通知地址');
+                        if (device.ip) this.button(actions, '测试通知', async () => {
+                            try { const result = await this.request('/api/jiyu/test', { method: 'POST', body: JSON.stringify({ userId: device.userId }) }); alert(result.message); }
                             catch(e) { alert(e.message); }
                         });
                         container.append(row);

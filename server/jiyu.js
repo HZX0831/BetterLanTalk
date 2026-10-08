@@ -32,7 +32,9 @@ function buildMessagePacket(text) {
 
 // Deliberately preserve the requested "flie" spelling and exclude message details.
 function formatJiyuMessage(message = {}) {
-    return message.type === 'file' ? (message.isImage ? 'new picture' : 'new flie') : 'new message';
+    const kind = message.type === 'file' ? (message.isImage ? 'new picture' : 'new flie') : 'new message';
+    const sender = String(message.username || '系统').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 20) || '系统';
+    return `from ${sender}: ${kind}`;
 }
 
 function sendJiyuPopup(targetIps, port, text, callback = () => {}, createSocket = dgram.createSocket) {
@@ -66,4 +68,20 @@ function sendJiyuPopup(targetIps, port, text, callback = () => {}, createSocket 
         } catch (error) { finish(error); }
     }
 }
-module.exports = { HEADER_BYTES, PACKET_TOTAL_SIZE, TEXT_OFFSET, MAX_TEXT_CHARS, buildMessagePacket, formatJiyuMessage, sendJiyuPopup };
+const DEVICE_COOLDOWN_MS = 20000;
+function createJiyuNotifier({ send = sendJiyuPopup, now = Date.now } = {}) {
+    const nextAllowed = new Map();
+    return function notify(ips, port, message, callback = () => {}) {
+        const time = now();
+        // Dropped notifications neither extend the window nor enter a replay queue.
+        for (const [ip, until] of nextAllowed) if (until <= time) nextAllowed.delete(ip);
+        const unique = [...new Set(ips)];
+        const eligible = unique.filter(ip => !nextAllowed.has(ip));
+        const skipped = unique.length - eligible.length;
+        if (!eligible.length) return callback(null, { sent: 0, total: unique.length, failed: 0, skipped });
+        // Reserve before asynchronous sending: concurrent messages and rooms share one cooldown.
+        for (const ip of eligible) nextAllowed.set(ip, time + DEVICE_COOLDOWN_MS);
+        send(eligible, port, formatJiyuMessage(message), (error, result) => callback(error, { ...result, total: unique.length, skipped }));
+    };
+}
+module.exports = { HEADER_BYTES, PACKET_TOTAL_SIZE, TEXT_OFFSET, MAX_TEXT_CHARS, buildMessagePacket, formatJiyuMessage, sendJiyuPopup, createJiyuNotifier, DEVICE_COOLDOWN_MS };
