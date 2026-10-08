@@ -40,3 +40,9 @@ server/files.json
 
 # 房间定义与邀请名单
 server/rooms.json
+
+# 好友、设备绑定与持久化聊天记录
+server/social.json
+server/messages.json
+server/*.json.tmp
+server/*.pre-social.bak

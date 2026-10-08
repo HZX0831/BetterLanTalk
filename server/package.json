@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "bundle": "pkg server.js --target node18-win-x64 --output chat-server.exe",
-    "test": "node --test test/*.test.cjs"
+    "test": "node --test test/*.test.cjs",
+    "test:browser": "node test/browser.cjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

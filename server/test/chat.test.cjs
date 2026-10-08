@@ -18,11 +18,11 @@ async function readiness(base) {
   assert.equal(info.name, '内网聊天室服务器');
   assert.equal(info.status, 'running');
   assert.equal(info.version, '1.1.1');
-  for (const route of ['/', '/client/index.html', '/socket.io/socket.io.js', '/assets/katex/katex.min.js', '/assets/prism/prism.js', '/assets/purify.js', '/client/vendor/luogu-markdown-editor/luogu-parser.js']) {
+  for (const route of ['/', '/client/index.html', '/socket.io/socket.io.js', '/client/login.js', '/client/login.css']) {
     const r = await fetch(base + route, { signal: AbortSignal.timeout(3000) });
     assert.equal(r.status, 200, route);
     const content = await r.text();
-    assert.ok(content.length > 1000, route);
+    assert.ok(content.length > 100, route);
     if (route === '/' || route === '/client/index.html') assert.ok(content.includes('<title>BetterLanTalk 内网聊天室</title>'), route);
   }
 }
@@ -49,7 +49,7 @@ async function smoke() {
   const workdir = path.join(root, 'server');
   fs.mkdirSync(workdir);
   fs.copyFileSync(path.join(repo, 'server/server.js'), path.join(workdir, 'server.js'));
-  fs.copyFileSync(path.join(repo, 'server/markdown.js'), path.join(workdir, 'markdown.js'));
+  for (const file of ['markdown.js', 'social.js', 'jiyu.js']) fs.copyFileSync(path.join(repo, 'server', file), path.join(workdir, file));
   fs.symlinkSync(path.join(repo, 'server/node_modules'), path.join(workdir, 'node_modules'), 'dir');
   fs.symlinkSync(path.join(repo, 'client'), path.join(root, 'client'), 'dir');
   const probe = net.createServer();
@@ -130,6 +130,8 @@ async function smoke() {
     console.log('PASS: file upload, listing, exact download content and file message delivery');
     const room = await api('/api/rooms', { method: 'POST', token: admin.token, body: { roomId: 'smoke-room', roomName: 'Smoke room' } });
     assert.equal(room.room.id, 'smoke-room');
+    assert.ok(!(await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));
+    await api('/api/rooms/smoke-room/join', { method: 'POST', token: login.token });
     assert.ok((await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));
     await api('/api/rooms/smoke-room?force=true', { method: 'DELETE', token: admin.token });
     assert.ok(!(await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));

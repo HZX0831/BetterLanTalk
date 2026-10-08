@@ -24,7 +24,7 @@ function receive(socket, name, matches = () => true) {
 test('persistent room membership and live administrator permissions', { timeout: 30000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lantalk-rooms-'));
   const dir = path.join(root, 'server'); fs.mkdirSync(dir);
-  for (const file of ['server.js', 'markdown.js']) fs.copyFileSync(path.join(repo, 'server', file), path.join(dir, file));
+  for (const file of ['server.js', 'markdown.js', 'social.js', 'jiyu.js']) fs.copyFileSync(path.join(repo, 'server', file), path.join(dir, file));
   fs.symlinkSync(path.join(repo, 'server/node_modules'), path.join(dir, 'node_modules'), 'dir');
   fs.symlinkSync(path.join(repo, 'client'), path.join(root, 'client'), 'dir');
   // Existing installations must retain passwords while upgrading the initial admin.
@@ -122,6 +122,7 @@ test('persistent room membership and live administrator permissions', { timeout:
       o.emit('typing', { roomId: 'private-team', isTyping: true });
       const message = receive(m, 'message', msg => msg.content === 'secret');
       m.emit('send_message', { roomId: 'private-team', content: 'secret' }); await message;
+      assert.equal((await api('/api/rooms?manage=1', admin.token)).find(room => room.id === 'private-team').lastMessage, null, 'management metadata must not reveal private message previews');
       await new Promise(r => setTimeout(r, 80));
       assert.ok(!secretEvents.some(msg => msg.room === 'private-team'));
       // A room ID equal to a Socket.IO connection ID must not bypass membership.
@@ -140,20 +141,19 @@ test('persistent room membership and live administrator permissions', { timeout:
       await rejected(o, 'send_file', { roomId: 'default', storedName: uploaded.file.storedName }, /不能转发/);
       await rejected(o, 'send_file', { roomId: 'private-team', storedName: uploaded.file.storedName }, /不能转发/);
     });
-    await t.test('public rooms automatically subscribe current users and future accounts', async () => {
-      const visible = receive(o, 'room_list', list => list.some(r => r.id === 'public-team'));
-      await api('/api/rooms', admin.token, { method: 'POST', body: { roomId: 'public-team', roomName: '公开项目', isPublic: true } }); await visible;
-      // The viewer is still in the private room but already receives public-room events.
+    await t.test('public groups require joining; new accounts only join default', async () => {
+      await api('/api/rooms', admin.token, { method: 'POST', body: { roomId: 'public-team', roomName: '公开项目', isPublic: true } });
+      assert.ok(!(await api('/api/rooms', outsider.token)).some(r => r.id === 'public-team'));
+      await rejected(o, 'join_room', { roomId: 'public-team' }, /未获邀请/);
+      await api('/api/rooms/public-team/join', outsider.token, { method: 'POST' });
       const received = receive(o, 'message', msg => msg.room === 'public-team');
       a.emit('send_message', { roomId: 'public-team', content: 'public announcement' }); await received;
       newcomer = await api('/api/register', null, { method: 'POST', body: { username: 'newcomer', password } });
+      assert.deepEqual((await api('/api/rooms', newcomer.token)).map(r => r.id), ['default']);
       const n = await connect(newcomer.token);
-      assert.ok((await api('/api/rooms', newcomer.token)).some(r => r.id === 'public-team'));
-      assert.ok(!(await api('/api/rooms', newcomer.token)).some(r => r.id === 'private-team'));
+      await api('/api/rooms/public-team/join', newcomer.token, { method: 'POST' });
       const delivered = receive(n, 'message', msg => msg.room === 'public-team');
       a.emit('send_message', { roomId: 'public-team', content: 'new account' }); await delivered;
-      await api('/api/rooms/public-team/invitations', admin.token, { method: 'POST', body: { username: 'outsider' }, status: 400 });
-      await api('/api/rooms/public-team/kick-users', admin.token, { method: 'POST', body: {}, status: 400 });
       await api('/api/rooms/public-team?force=true', manager.token, { method: 'DELETE', status: 403 });
     });
     await t.test('demotion revokes room management over old tokens and sockets', async () => {

@@ -30,96 +30,40 @@ function buildMessagePacket(text) {
     return packet;
 }
 
-/**
- * 格式化极域弹窗提示文本
- * 规则：
- * 1. 文件消息：[房间名 | 来自: 昵称]: 发送了文件 "文件名"
- * 2. 简短文字：[房间名 | 来自: 昵称]: 消息内容
- * 3. 超长文字（>80字或多行）：[房间名 | 来自: 昵称]: 发送了一条长消息，请自行打开查看
- * @param {string} roomName 房间名称
- * @param {string} sender 发信人昵称
- * @param {string} content 消息正文
- * @param {boolean} isFile 是否为文件消息
- * @param {string} fileName 文件名
- * @returns {string}
- */
-function formatJiyuMessage(roomName, sender, content, isFile = false, fileName = '') {
-    const room = roomName || '聊天室';
-    const from = sender || '某人';
-    if (isFile) {
-        return `[${room} | 来自: ${from}]: 发送了文件 "${fileName || '未知文件'}"`;
-    }
-    const clean = String(content || '').trim();
-    if (clean.length > 80 || clean.includes('\n')) {
-        return `[${room} | 来自: ${from}]: 发送了一条长消息，请自行打开查看`;
-    }
-    return `[${room} | 来自: ${from}]: ${clean}`;
+// Deliberately preserve the requested "flie" spelling and exclude message details.
+function formatJiyuMessage(message = {}) {
+    return message.type === 'file' ? (message.isImage ? 'new picture' : 'new flie') : 'new message';
 }
 
-/**
- * 发送极域 UDP 弹窗至目标 IP 列表
- * @param {string[]} targetIps 目标 IP 数组
- * @param {number} port 目标端口 (通常为 4705, 4605, 4988 等)
- * @param {string} text 格式化后的消息内容
- * @param {function} [callback] 发送完成回调
- */
-function sendJiyuPopup(targetIps, port, text, callback) {
-    if (!Array.isArray(targetIps) || !targetIps.length) {
-        if (typeof callback === 'function') callback(null, { sent: 0 });
+function sendJiyuPopup(targetIps, port, text, callback = () => {}, createSocket = dgram.createSocket) {
+    const { isIPv4 } = require('net');
+    const ips = Array.isArray(targetIps) ? [...new Set(targetIps)] : [];
+    if (!Number.isInteger(port) || port < 1 || port > 65535 || ips.some(ip => !isIPv4(ip))) {
+        callback(new Error('Invalid target'), { sent: 0, total: ips.length, failed: ips.length });
         return;
     }
-
-    const uniqueIps = Array.from(new Set(
-        targetIps.map(ip => String(ip || '').trim()).filter(ip => {
-            // 过滤无效 IP 或空值，允许局域网 IP 及本地回环 127.0.0.1
-            return ip && /^(\d{1,3}\.){3}\d{1,3}$/.test(ip);
-        })
-    ));
-
-    if (!uniqueIps.length) {
-        if (typeof callback === 'function') callback(null, { sent: 0 });
-        return;
-    }
-
-    const packet = buildMessagePacket(text);
-    const targetPort = Number(port) || 4705;
-    const client = dgram.createSocket('udp4');
-    let sentCount = 0;
-    let completed = 0;
-
-    const finalize = () => {
-        try { client.close(); } catch (e) {}
-        if (typeof callback === 'function') {
-            callback(null, { sent: sentCount, total: uniqueIps.length });
-        }
+    if (!ips.length) return callback(null, { sent: 0, total: 0, failed: 0 });
+    const client = createSocket('udp4');
+    let sent = 0, completed = 0, done = false;
+    const finish = error => {
+        if (done) return;
+        done = true; clearTimeout(timer);
+        try { client.close(); } catch {}
+        const result = { sent, total: ips.length, failed: ips.length - sent };
+        callback(error || (result.failed ? new Error('UDP send failed') : null), result);
     };
-
-    uniqueIps.forEach(ip => {
-        client.send(packet, targetPort, ip, (err) => {
-            if (err) {
-                console.error(`[极域] 发送至 ${ip}:${targetPort} 失败:`, err.message);
-            } else {
-                sentCount++;
-            }
-            completed++;
-            if (completed >= uniqueIps.length) {
-                finalize();
-            }
-        });
-    });
-
-    // 超时兜底关闭 socket
-    setTimeout(() => {
-        if (completed < uniqueIps.length) finalize();
-    }, 1500);
+    const timer = setTimeout(() => finish(new Error('UDP timeout')), 1500);
+    client.on('error', finish);
+    const packet = buildMessagePacket(text);
+    for (const ip of ips) {
+        if (done) break;
+        try {
+            client.send(packet, port, ip, error => {
+                if (done) return;
+                if (!error) sent++;
+                if (++completed === ips.length) finish();
+            });
+        } catch (error) { finish(error); }
+    }
 }
-
-module.exports = {
-    HEADER_BYTES,
-    PACKET_TOTAL_SIZE,
-    TEXT_OFFSET,
-    MAX_TEXT_CHARS,
-    buildMessagePacket,
-    formatJiyuMessage,
-    sendJiyuPopup
-};
+module.exports = { HEADER_BYTES, PACKET_TOTAL_SIZE, TEXT_OFFSET, MAX_TEXT_CHARS, buildMessagePacket, formatJiyuMessage, sendJiyuPopup };

@@ -6,11 +6,12 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { isIPv4 } = require('net');
+const { sendJiyuPopup, formatJiyuMessage } = require('./jiyu');
 const { exec } = require('child_process');
 
 // 预览与消息共用新版 Luogu Markdown 解析器。
 const processMarkdown = require('./markdown');
-const jiyu = require('./jiyu');
 
 // 简单的ID生成器
 function generateId() {
@@ -58,13 +59,19 @@ const CONFIG_FILE = path.join(__dirname, 'config.json');
 const USERS_FILE = path.join(__dirname, 'users.json');
 const FILES_FILE = path.join(__dirname, 'files.json');
 const ROOMS_FILE = path.join(__dirname, 'rooms.json');
+const SOCIAL_FILE = path.join(__dirname, 'social.json');
+const MESSAGES_FILE = path.join(__dirname, 'messages.json');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
 function loadJSON(file, def) {
-    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return def; }
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) {
+        if (error.code === 'ENOENT') return def;
+        throw new Error('无法读取持久化数据 ' + path.basename(file) + ': ' + error.message);
+    }
 }
 function saveJSON(file, data) {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(file + '.tmp', file);
 }
 
 let config = loadJSON(CONFIG_FILE, null) || {};
@@ -75,16 +82,14 @@ if (!config.maxUploadsMB || isNaN(config.maxUploadsMB)) config.maxUploadsMB = 20
 config.maxFileMB = Number(config.maxFileMB);
 config.maxUploadsMB = Number(config.maxUploadsMB);
 if (typeof config.serverIP !== 'string') config.serverIP = '';   // 手动指定的对外IP，留空则自动检测
-if (!config.jiyuPort || isNaN(config.jiyuPort)) config.jiyuPort = 4705; // 极域学生端监听端口，默认4705
-config.jiyuPort = Number(config.jiyuPort);
-if (typeof config.jiyuEnabled !== 'boolean') config.jiyuEnabled = true; // 极域弹窗提醒总开关
+config.jiyuEnabled = config.jiyuEnabled === true;
+config.jiyuPort = Number.isInteger(config.jiyuPort) && config.jiyuPort > 0 && config.jiyuPort <= 65535 ? config.jiyuPort : 4705;
 saveJSON(CONFIG_FILE, {
+    jiyuEnabled: config.jiyuEnabled, jiyuPort: config.jiyuPort,
     port: config.port,
     maxFileMB: config.maxFileMB,
     maxUploadsMB: config.maxUploadsMB,
-    serverIP: config.serverIP,
-    jiyuPort: config.jiyuPort,
-    jiyuEnabled: config.jiyuEnabled
+    serverIP: config.serverIP
 });
 
 // 确保上传目录存在
@@ -96,6 +101,9 @@ if (!Array.isArray(fileStore.files)) fileStore.files = [];
 function saveFiles() { saveJSON(FILES_FILE, fileStore); }
 
 let userStore = loadJSON(USERS_FILE, null) || { users: [], tokens: {} };
+if (Array.isArray(userStore.users) && userStore.users.some(user => !user.id)) {
+    for (const file of [USERS_FILE, ROOMS_FILE]) if (fs.existsSync(file) && !fs.existsSync(file + '.pre-social.bak')) fs.copyFileSync(file, file + '.pre-social.bak');
+}
 if (!Array.isArray(userStore.users)) userStore.users = [];
 if (typeof userStore.tokens !== 'object' || !userStore.tokens) userStore.tokens = {};
 
@@ -108,6 +116,7 @@ function hashPassword(password, salt) {
 function addUser(username, password, role, registeredIp) {
     const salt = crypto.randomBytes(16).toString('hex');
     const user = {
+        id: crypto.randomUUID(),
         username,
         salt,
         passwordHash: hashPassword(password, salt),
@@ -138,7 +147,7 @@ function getUserByToken(token) {
     }
     const account = userStore.users.find(u => u.username === t.username);
     if (!account) return null;
-    return { username: account.username, role: account.role };
+    return { id: account.id, username: account.username, role: account.role };
 }
 
 function clientIpOf(req) {
@@ -183,7 +192,14 @@ if (!userStore.users.length) {
     const initial = userStore.users.find(u => u.role === 'admin') || userStore.users[0];
     initial.role = 'superadmin';
 }
+for (const account of userStore.users) if (!account.id) account.id = crypto.randomUUID();
 saveUsers();
+const social = loadJSON(SOCIAL_FILE, { friends: [], requests: [], devices: [] });
+for (const key of ['friends', 'requests', 'devices']) if (!Array.isArray(social[key])) social[key] = [];
+const accountById = id => userStore.users.find(account => account.id === id);
+const accountId = name => userStore.users.find(account => account.username === name)?.id;
+const areFriends = (a, b) => social.friends.some(pair => pair.includes(a) && pair.includes(b));
+const saveSocial = () => saveJSON(SOCIAL_FILE, social);
 
 const io = new Server(server, {  // ← io 在这里初始化
     cors: {
@@ -194,7 +210,9 @@ const io = new Server(server, {  // ← io 在这里初始化
 
 const users = new Map();
 const rooms = new Map();
-const messages = new Map();
+const storedMessages = loadJSON(MESSAGES_FILE, { rooms: {} });
+const messages = new Map(Object.entries(storedMessages.rooms || {}).filter(([, value]) => Array.isArray(value)));
+function saveMessages() { saveJSON(MESSAGES_FILE, { rooms: Object.fromEntries(messages) }); }
 const mutedIPs = new Set();
 // 对外IP：优先使用配置中手动指定的，否则自动检测
 let localIP = (config.serverIP && config.serverIP.trim()) || getLocalIP();
@@ -286,6 +304,7 @@ function cleanupUploads() {
                 io.to(roomChannel(f.roomId)).emit('file_expired', { storedName: f.storedName });
             }
         });
+        saveMessages();
     }
     return removed;
 }
@@ -295,19 +314,27 @@ cleanupUploads();
 
 // Room membership is independent of which room the user is currently viewing.
 function saveRooms() {
-    saveJSON(ROOMS_FILE, { rooms: Array.from(rooms.values()).map(({ users, ...room }) => room) });
+    saveJSON(ROOMS_FILE, { membershipVersion: 2, rooms: Array.from(rooms.values()).map(({ users, ...room }) => room) });
 }
 function canAccessRoom(account, room) {
-    return !!account && !!room && (room.isPublic || room.members.includes(account.username));
+    return !!account && !!room && room.memberIds.includes(account.id);
 }
 function canManageRoom(account, room) {
-    return isAdmin(account) && !!room && (account.role === 'superadmin' || room.createdBy === account.username);
+    return isAdmin(account) && !!room && room.kind !== 'direct' && (account.role === 'superadmin' || room.createdBy === account.username);
+}
+function canSendRoom(account, room) {
+    return canAccessRoom(account, room) && (room.kind !== 'direct' || areFriends(...room.memberIds));
 }
 function roomInfo(room, account) {
-    return { id: room.id, name: room.name, isPublic: room.isPublic, createdBy: room.createdBy,
-        created: room.created, userCount: new Set(room.users.map(u => u.username)).size,
+    const other = room.kind === 'direct' ? accountById(room.memberIds.find(id => id !== account?.id)) : null;
+    const last = canAccessRoom(account, room) ? (messages.get(room.id) || []).at(-1) : null;
+    return { id: room.id, name: room.kind === 'direct' ? other?.username || '已删除的用户' : room.name,
+        kind: room.kind || 'group', isPublic: room.isPublic, createdBy: room.createdBy,
+        created: room.created, userCount: new Set(room.users.map(u => u.id)).size,
+        memberCount: room.memberIds.length, canSend: canSendRoom(account, room), peerId: other?.id,
+        lastMessage: last ? { timestamp: last.timestamp, preview: last.type === 'file' ? (last.isImage ? '[图片]' : '[文件]') : String(last.content || '').slice(0, 80) } : null,
         canManage: canManageRoom(account, room),
-        ...(canManageRoom(account, room) ? { members: room.members } : {}) };
+        ...(canManageRoom(account, room) ? { members: room.memberIds.map(id => accountById(id)?.username).filter(Boolean) } : {}) };
 }
 function visibleRooms(account, managing = false) {
     return Array.from(rooms.values()).filter(room => managing ? canManageRoom(account, room) : canAccessRoom(account, room)).map(room => roomInfo(room, account));
@@ -316,6 +343,7 @@ function socketUser(socket) {
     const user = users.get(socket.id);
     const account = getUserByToken(socket.data.token);
     if (!user || !account) return null;
+    user.id = account.id;
     user.username = account.username;
     user.role = account.role;
     return user;
@@ -329,7 +357,13 @@ function syncRoomSubscriptions() {
             if (canAccessRoom(user, room)) {
                 socket.join(roomChannel(room.id));
                 room.users.push(user);
-            } else socket.leave(roomChannel(room.id));
+            } else {
+                socket.leave(roomChannel(room.id));
+                if (user.currentRoom === room.id) {
+                    socket.emit('kicked_from_room', { roomId: room.id, reason: '已失去此会话的成员权限' });
+                    switchRoom(socket, user, rooms.get('default'));
+                }
+            }
         }
     }
     for (const room of rooms.values()) updateUserList(room.id);
@@ -337,7 +371,7 @@ function syncRoomSubscriptions() {
 }
 function createRoom(roomId, roomName, isPublic = true, createdBy = '') {
     const room = { id: roomId, name: roomName || roomId, isPublic, createdBy,
-        members: isPublic ? [] : [createdBy], users: [], created: Date.now() };
+        members: [createdBy].filter(Boolean), memberIds: createdBy ? [accountId(createdBy)] : [], kind: 'group', users: [], created: Date.now() };
     rooms.set(roomId, room);
     messages.set(roomId, []);
     saveRooms();
@@ -363,14 +397,14 @@ function broadcastRoomList() {
 function updateUserList(roomId) {
     const room = rooms.get(roomId);
     if (!room) return;
-    const unique = new Map(room.users.map(user => [user.username, user]));
-    io.to(roomChannel(roomId)).emit('user_list', Array.from(unique.values()).map(user => ({
-        id: user.id, username: user.username, joinTime: user.joinTime, ip: user.ip, isMuted: user.isMuted
-    })), roomId);
+    const list = room.memberIds.map(id => accountById(id)).filter(Boolean).map(account => ({
+        id: account.id, username: account.username, online: room.users.some(user => user.id === account.id)
+    }));
+    io.to(roomChannel(roomId)).emit('user_list', list, roomId);
 }
 function switchRoom(socket, user, room) {
     user.currentRoom = room.id;
-    socket.emit('room_joined', { roomId: room.id, roomName: room.name, userCount: new Set(room.users.map(member => member.username)).size });
+    socket.emit('room_joined', { roomId: room.id, roomName: roomInfo(room, user).name, canSend: canSendRoom(user, room), kind: room.kind, userCount: new Set(room.users.map(member => member.username)).size });
     socket.emit('message_history', (messages.get(room.id) || []).slice(-50), room.id);
     updateUserList(room.id);
 }
@@ -378,7 +412,20 @@ function switchRoom(socket, user, room) {
 // 中间件
 app.use(cors());
 app.use(express.json());
-app.use('/client', express.static(path.join(__dirname, '../client')));
+const clientDir = path.join(__dirname, '../client');
+app.use('/client', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    let resource;
+    try { resource = decodeURIComponent(req.path); } catch { return res.sendStatus(400); }
+    if (resource.includes('%') || resource.includes('\\') || resource.includes('\0') || resource.split('/').some(part => part === '.' || part === '..')) return res.sendStatus(400);
+    const publicFiles = ['/index.html', '/login.js', '/login.css'];
+    if (publicFiles.includes(resource)) return next();
+    const gate = /^\/admin(?:\.|\/)/i.test(resource) ? adminMiddleware : authMiddleware;
+    const protectedFiles = ['/chat.html', '/chat.js', '/styles.css', '/composer.js', '/notifications.js', '/markdown.js',
+        '/admin.html', '/admin.js', '/admin.css', '/vendor/luogu-markdown-editor/luogu-parser.js'];
+    gate(req, res, () => protectedFiles.includes(resource) ? next() : res.sendStatus(404));
+}, express.static(clientDir, { index: false, dotfiles: 'deny' }));
+app.use('/assets', authMiddleware, (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
 app.use('/assets/katex', express.static(path.join(__dirname, 'node_modules/katex/dist')));
 app.use('/assets/prism', express.static(path.join(__dirname, 'node_modules/prismjs')));
 app.get('/assets/purify.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/dompurify/dist/purify.min.js')));
@@ -390,29 +437,33 @@ app.get('/uploads/:storedName', authMiddleware, (req, res) => {
     res.sendFile(path.join(UPLOADS_DIR, file.storedName));
 });
 
-// Restore definitions and invitations without restoring live connections.
+// Migrate legacy public groups once, keeping access for existing accounts.
 const storedRooms = loadJSON(ROOMS_FILE, { rooms: [] });
 for (const saved of (Array.isArray(storedRooms.rooms) ? storedRooms.rooms : [])) {
     if (typeof saved.id !== 'string') continue;
-    rooms.set(saved.id, { ...saved, isPublic: saved.isPublic !== false,
-        members: Array.isArray(saved.members) ? saved.members : [], users: [] });
-    messages.set(saved.id, []);
+    const memberIds = Array.isArray(saved.memberIds) ? saved.memberIds :
+        saved.isPublic !== false ? userStore.users.map(user => user.id) : (saved.members || []).map(accountId).filter(Boolean);
+    rooms.set(saved.id, { ...saved, kind: saved.kind || 'group', isPublic: saved.isPublic !== false,
+        members: Array.isArray(saved.members) ? saved.members : [], memberIds, users: [] });
+    if (!messages.has(saved.id)) messages.set(saved.id, []);
 }
-if (!rooms.has('default')) createRoom('default', '公共聊天室');
+if (!rooms.has('default')) createRoom('default', '默认聊天室');
 rooms.get('default').isPublic = true;
+rooms.get('default').memberIds = userStore.users.map(account => account.id);
 saveRooms();
+saveMessages();
 
-// API路由
+// Separate pages; protected sources are never part of the login response.
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/index.html'));
+    res.set('Cache-Control', 'no-store');
+    if (getUserByToken(requestToken(req))) return res.redirect('/chat');
+    res.sendFile(path.join(clientDir, 'index.html'));
 });
-
-app.get('/chat', (req, res) => {
-    res.redirect('/');
+app.get('/chat', authMiddleware, (req, res) => {
+    res.set('Cache-Control', 'no-store'); res.sendFile(path.join(clientDir, 'chat.html'));
 });
-
-app.get('/admin', (req, res) => {
-    res.redirect('/');
+app.get('/admin', adminMiddleware, (req, res) => {
+    res.set('Cache-Control', 'no-store'); res.sendFile(path.join(clientDir, 'admin.html'));
 });
 
 app.get('/api/status', (req, res) => {
@@ -436,6 +487,8 @@ app.get('/api/health', (req, res) => {
         timestamp: Date.now()
     });
 });
+
+app.get('/api/my-notification-devices', authMiddleware, (req, res) => res.json({ enabled: config.jiyuEnabled, ips: social.devices.filter(device => device.userId === req.auth.id).map(device => device.ip) }));
 
 app.get('/api/users', adminMiddleware, (req, res) => {
     const userList = Array.from(users.values()).map(user => ({
@@ -477,10 +530,10 @@ app.post('/api/unmute-ip', adminMiddleware, (req, res) => {
 // ============ 账号相关 API ============
 app.post('/api/register', (req, res) => {
     const { username, password } = req.body;
-    if (!username || username.length < 2 || username.length > 20) {
+    if (typeof username !== 'string' || username.length < 2 || username.length > 20) {
         return res.status(400).json({ error: '用户名长度应为2-20个字符' });
     }
-    if (!password || password.length < 6) {
+    if (typeof password !== 'string' || password.length < 6) {
         return res.status(400).json({ error: '密码长度至少6位' });
     }
     if (userStore.users.some(u => u.username === username)) {
@@ -490,7 +543,10 @@ app.post('/api/register', (req, res) => {
     if (ip && userStore.users.some(u => u.registeredIp && u.registeredIp === ip)) {
         return res.status(403).json({ error: '该IP已注册过账号，每个IP仅限注册一个用户' });
     }
-    addUser(username, password, 'user', ip);
+    const account = addUser(username, password, 'user', ip);
+    rooms.get('default').memberIds.push(account.id);
+    saveRooms();
+    syncRoomSubscriptions();
     const token = createToken(username, 'user');
     console.log(`新用户注册: ${username} (IP: ${ip})`);
     sessionCookie(req, res, token);
@@ -515,7 +571,7 @@ app.post('/api/login', (req, res) => {
 app.get('/api/me', authMiddleware, (req, res) => {
     sessionCookie(req, res, req.authToken);
     const user = userStore.users.find(u => u.username === req.auth.username);
-    res.json({ username: req.auth.username, role: user ? user.role : req.auth.role });
+    res.json({ id: user.id, username: req.auth.username, role: user ? user.role : req.auth.role, token: req.authToken });
 });
 
 app.post('/api/logout', authMiddleware, (req, res) => {
@@ -531,6 +587,7 @@ app.post('/api/logout', authMiddleware, (req, res) => {
 // 账号管理（仅管理员）
 app.get('/api/accounts', adminMiddleware, (req, res) => {
     res.json(userStore.users.map(u => ({
+        id: u.id,
         username: u.username,
         role: u.role,
         registeredIp: u.registeredIp,
@@ -545,7 +602,7 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
 
     const { newUsername, newPassword } = req.body;
     if (newUsername !== undefined) {
-        if (newUsername.length < 2 || newUsername.length > 20) {
+        if (typeof newUsername !== 'string' || newUsername.length < 2 || newUsername.length > 20) {
             return res.status(400).json({ error: '用户名长度应为2-20个字符' });
         }
         if (userStore.users.some(u => u.username === newUsername)) {
@@ -564,7 +621,7 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
         saveFiles();
     }
     if (newPassword !== undefined && newPassword !== '') {
-        if (newPassword.length < 6) {
+        if (typeof newPassword !== 'string' || newPassword.length < 6) {
             return res.status(400).json({ error: '密码长度至少6位' });
         }
         user.salt = crypto.randomBytes(16).toString('hex');
@@ -572,7 +629,8 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
     }
     saveUsers();
     syncRoomSubscriptions();
-    for (const socket of io.sockets.sockets.values()) if (getUserByToken(socket.data.token)?.username === user.username) socket.emit('account_changed', { username: user.username, role: user.role });
+    socialChanged();
+    for (const socket of io.sockets.sockets.values()) if (getUserByToken(socket.data.token)?.username === user.username) socket.emit('account_changed', { id: user.id, username: user.username, role: user.role });
     console.log(`管理员修改账号: ${req.params.username} -> ${user.username}`);
     res.json({ success: true, message: '修改成功', user: { username: user.username, role: user.role } });
 });
@@ -592,10 +650,15 @@ app.delete('/api/users/:username', adminMiddleware, (req, res) => {
     for (const socket of io.sockets.sockets.values()) if (!getUserByToken(socket.data.token)) socket.disconnect(true);
     for (const room of rooms.values()) {
         room.members = room.members.filter(name => name !== user.username);
+        room.memberIds = room.memberIds.filter(id => id !== user.id);
         if (room.createdBy === user.username) room.createdBy = '';
     }
     saveRooms();
     syncRoomSubscriptions();
+    social.friends = social.friends.filter(pair => !pair.includes(user.id));
+    social.requests = social.requests.filter(request => request.from !== user.id && request.to !== user.id);
+    social.devices = social.devices.filter(device => device.userId !== user.id);
+    saveSocial(); socialChanged();
     console.log(`管理员删除账号: ${user.username}`);
     res.json({ success: true, message: `用户 ${user.username} 已删除` });
 });
@@ -608,7 +671,7 @@ app.put('/api/users/:username/role', superadminMiddleware, (req, res) => {
     account.role = req.body.role;
     saveUsers();
     for (const socket of io.sockets.sockets.values()) {
-        if (getUserByToken(socket.data.token)?.username === account.username) socket.emit('account_changed', { username: account.username, role: account.role });
+        if (getUserByToken(socket.data.token)?.username === account.username) socket.emit('account_changed', { id: account.id, username: account.username, role: account.role });
     }
     syncRoomSubscriptions();
     res.json({ success: true, username: account.username, role: account.role });
@@ -621,10 +684,9 @@ app.get('/api/config', adminMiddleware, (req, res) => {
         maxFileMB: config.maxFileMB,
         maxUploadsMB: config.maxUploadsMB,
         serverIP: config.serverIP || '',
+        jiyuEnabled: config.jiyuEnabled, jiyuPort: config.jiyuPort,
         detectedIP: getLocalIP(),
-        localIP,
-        jiyuPort: config.jiyuPort || 4705,
-        jiyuEnabled: config.jiyuEnabled !== false
+        localIP
     });
 });
 
@@ -654,15 +716,18 @@ app.get('/api/files', authMiddleware, (req, res) => {
 });
 
 app.put('/api/config', adminMiddleware, (req, res) => {
-    const { port, maxFileMB, maxUploadsMB, serverIP, jiyuPort, jiyuEnabled } = req.body;
+    const { port, maxFileMB, maxUploadsMB, serverIP, jiyuEnabled, jiyuPort } = req.body;
+    if (jiyuEnabled !== undefined && typeof jiyuEnabled !== 'boolean') return res.status(400).json({ error: '极域开关必须为布尔值' });
+    if (jiyuPort !== undefined && (!Number.isInteger(jiyuPort) || jiyuPort < 1 || jiyuPort > 65535)) return res.status(400).json({ error: '极域端口应为1-65535的整数' });
     const updated = [];
+    const nextConfig = { ...config };
 
     if (port !== undefined) {
         const p = Number(port);
         if (!p || isNaN(p) || p < 1 || p > 65535) {
             return res.status(400).json({ error: '端口号应为1-65535之间的数字' });
         }
-        config.port = p;
+        nextConfig.port = p;
         updated.push(`端口 ${p}（重启生效）`);
     }
     if (serverIP !== undefined) {
@@ -674,16 +739,16 @@ app.put('/api/config', adminMiddleware, (req, res) => {
         if (ip && !isValidIPv4(ip)) {
             return res.status(400).json({ error: '对外IP格式无效，应为如 192.168.1.10，留空表示自动检测' });
         }
-        config.serverIP = ip;
-        localIP = ip || getLocalIP();
-        updated.push(`对外IP ${localIP}`);
+        nextConfig.serverIP = ip;
+
+        updated.push(`对外IP ${ip || getLocalIP()}`);
     }
     if (maxFileMB !== undefined) {
         const m = Number(maxFileMB);
         if (!m || isNaN(m) || m <= 0) {
             return res.status(400).json({ error: '单文件上限应为正整数(MB)' });
         }
-        config.maxFileMB = m;
+        nextConfig.maxFileMB = m;
         updated.push(`单文件上限 ${m}MB`);
     }
     if (maxUploadsMB !== undefined) {
@@ -691,117 +756,36 @@ app.put('/api/config', adminMiddleware, (req, res) => {
         if (!m || isNaN(m) || m <= 0) {
             return res.status(400).json({ error: '上传目录总上限应为正整数(MB)' });
         }
-        config.maxUploadsMB = m;
+        nextConfig.maxUploadsMB = m;
         updated.push(`上传目录总上限 ${m}MB`);
     }
-    if (config.maxFileMB > config.maxUploadsMB) {
+    if (nextConfig.maxFileMB > nextConfig.maxUploadsMB) {
         return res.status(400).json({ error: '单文件上限不能大于上传目录总上限' });
     }
-    if (jiyuPort !== undefined) {
-        const jp = Number(jiyuPort);
-        if (!jp || isNaN(jp) || jp < 1 || jp > 65535) {
-            return res.status(400).json({ error: '极域端口号应为1-65535之间的数字' });
-        }
-        config.jiyuPort = jp;
-        updated.push(`极域端口 ${jp}`);
-    }
-    if (jiyuEnabled !== undefined) {
-        config.jiyuEnabled = !!jiyuEnabled;
-        updated.push(`极域弹窗提醒 ${config.jiyuEnabled ? '已启用' : '已停用'}`);
-    }
 
+    if (jiyuEnabled !== undefined) { nextConfig.jiyuEnabled = jiyuEnabled; updated.push('极域通知开关'); }
+    if (jiyuPort !== undefined) { nextConfig.jiyuPort = jiyuPort; updated.push('极域端口'); }
+    Object.assign(config, nextConfig);
+    localIP = nextConfig.serverIP || getLocalIP();
     saveJSON(CONFIG_FILE, {
-        port: config.port,
-        maxFileMB: config.maxFileMB,
-        maxUploadsMB: config.maxUploadsMB,
-        serverIP: config.serverIP,
-        jiyuPort: config.jiyuPort,
-        jiyuEnabled: config.jiyuEnabled
+        jiyuEnabled: nextConfig.jiyuEnabled, jiyuPort: nextConfig.jiyuPort,
+        port: nextConfig.port,
+        maxFileMB: nextConfig.maxFileMB,
+        maxUploadsMB: nextConfig.maxUploadsMB,
+        serverIP: nextConfig.serverIP
     });
     // 修改上限后立即按新上限清理一次
     cleanupUploads();
     res.json({
         success: true,
         message: updated.length ? '已更新: ' + updated.join('、') : '无改动',
-        port: config.port,
-        maxFileMB: config.maxFileMB,
-        maxUploadsMB: config.maxUploadsMB,
-        serverIP: config.serverIP,
-        localIP,
-        jiyuPort: config.jiyuPort,
-        jiyuEnabled: config.jiyuEnabled
+        port: nextConfig.port,
+        maxFileMB: nextConfig.maxFileMB,
+        maxUploadsMB: nextConfig.maxUploadsMB,
+        serverIP: nextConfig.serverIP,
+        localIP
     });
 });
-
-// 极域弹窗连通性测试 API
-app.post('/api/jiyu/test', adminMiddleware, (req, res) => {
-    const { ip } = req.body || {};
-    const targetIp = String(ip || '').trim();
-    if (!targetIp || !/^(\d{1,3}\.){3}\d{1,3}$/.test(targetIp)) {
-        return res.status(400).json({ error: '请输入有效的测试目标 IP 地址' });
-    }
-    const port = config.jiyuPort || 4705;
-    const testMsg = `[极域测试 | 管理员: ${req.auth.username}]: 这是一条来自 BetterLanTalk 的极域弹窗连通性测试消息！`;
-    jiyu.sendJiyuPopup([targetIp], port, testMsg, (err, result) => {
-        if (err) return res.status(500).json({ error: '发送失败: ' + err.message });
-        res.json({ success: true, message: `已向 ${targetIp}:${port} 发送测试弹窗`, result });
-    });
-});
-
-/**
- * 智能向房间内需要接收极域弹窗的目标（离线或未聚焦/不在当前房间）发送极域弹窗
- * @param {string} roomId 房间ID
- * @param {string} senderUsername 发信人账号名
- * @param {string} content 消息正文
- * @param {boolean} isFile 是否为文件
- * @param {string} fileName 文件名
- */
-function notifyJiyuRoom(roomId, senderUsername, content, isFile = false, fileName = '') {
-    if (config.jiyuEnabled === false) return;
-
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    // 1. 确定该房间所有应通知的账号名单
-    let eligibleUsernames = [];
-    if (room.isPublic) {
-        eligibleUsernames = userStore.users.map(u => u.username);
-    } else {
-        eligibleUsernames = Array.from(new Set([room.createdBy, ...(room.members || [])])).filter(Boolean);
-    }
-
-    // 排除发信人自己
-    eligibleUsernames = eligibleUsernames.filter(name => name !== senderUsername);
-    if (!eligibleUsernames.length) return;
-
-    // 2. 检查哪些用户当前正在在线并且积极查看该房间 (isViewing === true && currentRoom === roomId)
-    const activeViewers = new Set();
-    for (const onlineUser of users.values()) {
-        if (onlineUser.isViewing && onlineUser.currentRoom === roomId) {
-            activeViewers.add(onlineUser.username);
-        }
-    }
-
-    // 3. 需要接收极域弹窗的账号 = 有资格的账号中未在积极查看该房间的
-    const needPopupUsernames = eligibleUsernames.filter(name => !activeViewers.has(name));
-    if (!needPopupUsernames.length) return;
-
-    // 4. 获取这些账号在注册时绑定的 IP
-    const targetIps = [];
-    for (const name of needPopupUsernames) {
-        const acc = userStore.users.find(u => u.username === name);
-        if (acc && acc.registeredIp) {
-            targetIps.push(acc.registeredIp);
-        }
-    }
-
-    if (!targetIps.length) return;
-
-    // 5. 格式化并发送极域弹窗
-    const jiyuText = jiyu.formatJiyuMessage(room.name, senderUsername, content, isFile, fileName);
-    console.log(`📡 [极域推送] 房间: ${room.name}, 发件人: ${senderUsername}, 目标IP数: ${targetIps.length}, 端口: ${config.jiyuPort}`);
-    jiyu.sendJiyuPopup(targetIps, config.jiyuPort, jiyuText);
-}
 
 // ============ 文件上传 API ============
 app.post('/api/upload', authMiddleware, (req, res) => {
@@ -816,7 +800,7 @@ app.post('/api/upload', authMiddleware, (req, res) => {
     if (!rooms.has(roomId)) {
         return res.status(400).json({ error: '目标房间不存在' });
     }
-    if (!canAccessRoom(req.auth, rooms.get(roomId))) return res.status(403).json({ error: '无权访问该房间' });
+    if (!canSendRoom(req.auth, rooms.get(roomId))) return res.status(403).json({ error: '无权访问该房间' });
 
     let originalName = 'file';
     try { originalName = decodeURIComponent(String(req.headers['x-filename'] || 'file')); } catch (e) {}
@@ -873,7 +857,7 @@ app.post('/api/upload', authMiddleware, (req, res) => {
         }
 
         const account = getUserByToken(req.authToken);
-        if (!canAccessRoom(account, rooms.get(roomId))) {
+        if (!canSendRoom(account, rooms.get(roomId))) {
             fs.unlink(filePath, () => {});
             return res.status(403).json({ error: '房间访问权限已失效' });
         }
@@ -925,27 +909,13 @@ app.post('/api/broadcast', adminMiddleware, (req, res) => {
     };
 
     rooms.forEach((room, roomId) => {
-        messages.get(roomId)?.push(adminMessage);
+        if (room.kind === 'direct') return;
+        const message = { ...adminMessage, room: roomId };
+        messages.get(roomId)?.push(message);
+        io.to(roomChannel(roomId)).emit('message', message);
+        notifyJiyuRoom(room, req.auth.id, message);
     });
-
-    io.emit('message', adminMessage);
-
-    // 极域弹窗广播推送
-    if (config.jiyuEnabled !== false) {
-        const activeViewers = new Set();
-        for (const onlineUser of users.values()) {
-            if (onlineUser.isViewing) activeViewers.add(onlineUser.username);
-        }
-        const targetIps = userStore.users
-            .filter(u => u.username !== req.auth.username && !activeViewers.has(u.username))
-            .map(u => u.registeredIp)
-            .filter(Boolean);
-        if (targetIps.length) {
-            const jiyuText = `[系统广播 | 来自: ${req.auth.username}]: ${message}`;
-            jiyu.sendJiyuPopup(targetIps, config.jiyuPort, jiyuText);
-        }
-    }
-
+    saveMessages();
     res.json({ success: true, message: '广播发送成功' });
 });
 app.post('/api/rooms', adminMiddleware, (req, res) => {
@@ -964,9 +934,11 @@ function managedRoom(req, res, next) {
 }
 app.post('/api/rooms/:roomId/invitations', adminMiddleware, managedRoom, (req, res) => {
     const room = req.room;
-    if (room.isPublic) return res.status(400).json({ error: '公开房间已自动加入所有用户' });
+    if (room.id === 'default') return res.status(400).json({ error: '默认群自动加入所有账号' });
     if (!userStore.users.some(u => u.username === req.body.username)) return res.status(404).json({ error: '该账号不存在，请先注册' });
     if (!room.members.includes(req.body.username)) room.members.push(req.body.username);
+    const id = accountId(req.body.username);
+    if (!room.memberIds.includes(id)) room.memberIds.push(id);
     saveRooms();
     syncRoomSubscriptions();
     for (const socket of io.sockets.sockets.values()) {
@@ -994,15 +966,17 @@ app.delete('/api/rooms/:roomId', adminMiddleware, managedRoom, (req, res) => {
     removeRoomConnections(req.room, '房间已被管理员删除');
     rooms.delete(req.room.id);
     messages.delete(req.room.id);
+    saveMessages();
     saveRooms();
     broadcastRoomList();
     res.json({ success: true, message: '房间已删除', force, kickedUsers });
 });
 app.post('/api/rooms/:roomId/kick-users', adminMiddleware, managedRoom, (req, res) => {
-    if (req.room.isPublic) return res.status(400).json({ error: '公开房间自动加入所有用户，不能移除成员' });
+    if (req.room.id === 'default') return res.status(400).json({ error: '不能移除默认群成员' });
     const kickedCount = req.room.users.length;
     removeRoomConnections(req.room, '房间成员已被管理员移除');
     req.room.members = [req.room.createdBy].filter(Boolean);
+    req.room.memberIds = [accountId(req.room.createdBy)].filter(Boolean);
     saveRooms();
     syncRoomSubscriptions();
     res.json({ success: true, message: '已移除受邀成员', kickedCount });
@@ -1012,9 +986,27 @@ app.get('/api/rooms', authMiddleware, (req, res) => {
     res.json(visibleRooms(req.auth, req.query.manage === '1'));
 });
 
+const socialChanged = require('./social')({ app, authMiddleware, adminMiddleware, userStore, social, saveSocial,
+    rooms, messages, saveRooms, saveMessages, accountById, areFriends, canAccessRoom, canManageRoom,
+    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, isIPv4, sendJiyuPopup });
+function notifyJiyuRoom(room, senderId, message) {
+    if (!config.jiyuEnabled || !room) return;
+    const recipients = room.memberIds.filter(id => id !== senderId && ![...users.values()].some(user =>
+        user.id === id && user.currentRoom === room.id && user.isViewing));
+    const ips = social.devices.filter(device => recipients.includes(device.userId)).map(device => device.ip);
+    if (!ips.length) return;
+    sendJiyuPopup(ips, config.jiyuPort, formatJiyuMessage(message), (error, result) => {
+        if (error) console.error('极域 UDP 发送失败:', result);
+    });
+}
+
 // Socket.IO处理 - 现在 io 已经初始化了
 io.on('connection', (socket) => {
     const clientIP = socket.handshake.address;
+    socket.on('client_state', data => {
+        const user = socketUser(socket);
+        if (user && data && typeof data.isViewing === 'boolean') user.isViewing = data.isViewing;
+    });
     console.log(`用户连接: ${socket.id} from ${clientIP}`);
 
     socket.on('create_room', (data = {}) => {
@@ -1034,6 +1026,7 @@ io.on('connection', (socket) => {
         if (room.users.length) return socket.emit('error', '请在管理面板中强制删除有用户的房间');
         rooms.delete(room.id);
         messages.delete(room.id);
+        saveMessages();
         saveRooms();
         broadcastRoomList();
         socket.emit('room_deleted', { roomId: room.id, roomName: room.name });
@@ -1046,7 +1039,7 @@ io.on('connection', (socket) => {
         switchRoom(socket, user, room);
     });
     socket.on('join', (data) => {
-        const { token, roomId = 'default' } = data || {};
+        const { token = requestToken({ headers: socket.request.headers }), roomId = 'default' } = data || {};
         const auth = getUserByToken(token);
         if (!auth) return socket.emit('error', '登录已过期，请重新登录');
         const room = rooms.get(roomId);
@@ -1057,27 +1050,15 @@ io.on('connection', (socket) => {
             socket.emit('error', '登录已过期，请重新登录');
             socket.disconnect(true);
         }, Math.max(0, userStore.tokens[token].expiresAt - Date.now()));
-        const user = { id: generateId(), username: auth.username, role: auth.role,
+        const user = { id: auth.id, isViewing: false, username: auth.username, role: auth.role,
             socketId: socket.id, joinTime: Date.now(), ip: clientIP.replace('::ffff:', ''),
-            isMuted: mutedIPs.has(clientIP.replace('::ffff:', '')), currentRoom: roomId,
-            isViewing: true };
+            isMuted: mutedIPs.has(clientIP.replace('::ffff:', '')), currentRoom: roomId };
         users.set(socket.id, user);
         syncRoomSubscriptions();
         socket.emit('account_changed', auth);
         switchRoom(socket, user, room);
+        socialChanged();
         if (!cancelPendingLeave(user.username)) broadcastUserJoined(socket, roomId, user.username, 'join');
-    });
-
-    // 客户端页面焦点与可见状态上报（用于智能免打扰判断）
-    socket.on('client_state', (data = {}) => {
-        const user = users.get(socket.id);
-        if (!user) return;
-        if (typeof data.isViewing === 'boolean') {
-            user.isViewing = data.isViewing;
-        }
-        if (typeof data.currentRoom === 'string') {
-            user.currentRoom = data.currentRoom;
-        }
     });
 
     socket.on('send_message', (data) => {
@@ -1089,7 +1070,7 @@ io.on('connection', (socket) => {
             return;
         }
         
-        if (!canAccessRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
+        if (!canSendRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
         if (user.isMuted) {
             socket.emit('error', '你已被禁言，无法发送消息');
             return;
@@ -1105,22 +1086,21 @@ io.on('connection', (socket) => {
         const message = {
             id: messageId,
             type: 'text',
-            username: user.username,
+            username: user.username, userId: user.id,
             content,
             processedContent: processedContent,
             isMarkdown: isMarkdown,
             timestamp: Date.now(),
             room: roomId,
-            userIP: user.ip
         };
         
         const roomMessages = messages.get(roomId) || [];
         roomMessages.push(message);
+        saveMessages();
         io.to(roomChannel(roomId)).emit('message', message);
+        notifyJiyuRoom(rooms.get(roomId), user.id, message);
+        broadcastRoomList();
         
-        // 极域弹窗智能推送（仅向离线或未聚焦查看该房间的用户发送）
-        notifyJiyuRoom(roomId, user.username, content, false);
-
         console.log(`消息 [${roomId}]: ${user.username} (IP: ${user.ip}): ${content}`);
     });
 
@@ -1133,7 +1113,7 @@ io.on('connection', (socket) => {
             socket.emit('error', '请先加入聊天室');
             return;
         }
-        if (!canAccessRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
+        if (!canSendRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
         if (user.isMuted) {
             socket.emit('error', '你已被禁言，无法发送文件');
             return;
@@ -1157,7 +1137,7 @@ io.on('connection', (socket) => {
         const message = {
             id: generateId(),
             type: 'file',
-            username: user.username,
+            username: user.username, userId: user.id,
             name: record.name,
             size: record.size,
             mimeType: record.mimeType,
@@ -1166,16 +1146,15 @@ io.on('connection', (socket) => {
             isImage: String(record.mimeType || '').startsWith('image/'),
             timestamp: Date.now(),
             room: roomId,
-            userIP: user.ip
         };
 
         const roomMessages = messages.get(roomId) || [];
         roomMessages.push(message);
+        saveMessages();
         io.to(roomChannel(roomId)).emit('message', message);
+        notifyJiyuRoom(rooms.get(roomId), user.id, message);
+        broadcastRoomList();
         saveFiles();
-
-        // 极域弹窗智能推送
-        notifyJiyuRoom(roomId, user.username, '', true, record.name);
 
         console.log(`文件消息 [${roomId}]: ${record.name} by ${user.username}`);
     });
@@ -1184,9 +1163,9 @@ io.on('connection', (socket) => {
         const { isTyping, roomId = 'default' } = data || {};
         const user = socketUser(socket);
         
-        if (user && !user.isMuted && canAccessRoom(user, rooms.get(roomId))) {
+        if (user && !user.isMuted && canSendRoom(user, rooms.get(roomId))) {
             socket.to(roomChannel(roomId)).emit('user_typing', {
-                username: user.username,
+                username: user.username, userId: user.id,
                 isTyping, room: roomId
             });
         }
@@ -1212,6 +1191,7 @@ io.on('connection', (socket) => {
 
             users.delete(socket.id);
             broadcastRoomList();
+            socialChanged();
 
             // 若该账号已无其他在线连接，则延迟广播离开（可被刷新重连取消）
             const stillOnline = Array.from(users.values()).some(u => u.username === user.username);
@@ -1245,7 +1225,6 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`🌐 内网访问: http://${localIP}:${PORT}`);
     console.log(`💬 聊天室: http://${localIP}:${PORT}/`);
     console.log(`📎 文件传输: 单文件上限 ${config.maxFileMB}MB / 目录总量 ${config.maxUploadsMB}MB（管理面板可调）`);
-    console.log(`📡 极域弹窗: 目标端口 ${config.jiyuPort} (${config.jiyuEnabled ? '已启用' : '已停用'})`);
     console.log('================================');
     console.log('按 Ctrl+C 停止服务器');
 

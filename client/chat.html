@@ -1,0 +1,140 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BetterLanTalk 内网聊天室</title>
+<link rel="stylesheet" href="/client/styles.css">
+<link rel="stylesheet" href="/assets/katex/katex.min.css">
+<link rel="stylesheet" href="/assets/prism/themes/prism.css">
+<script defer src="/assets/katex/katex.min.js"></script>
+<script defer src="/assets/prism/prism.js"></script>
+<script defer src="/assets/prism/components/prism-c.min.js"></script>
+<script defer src="/assets/prism/components/prism-cpp.min.js"></script>
+<script defer src="/assets/prism/components/prism-python.min.js"></script>
+<script defer src="/assets/prism/components/prism-bash.min.js"></script>
+<script defer src="/assets/prism/components/prism-json.min.js"></script>
+<script defer src="/assets/prism/components/prism-java.min.js"></script>
+<script defer src="/assets/prism/components/prism-rust.min.js"></script>
+<script defer src="/assets/prism/components/prism-go.min.js"></script>
+<script defer src="/assets/prism/components/prism-pascal.min.js"></script>
+<script defer src="/assets/prism/components/prism-latex.min.js"></script>
+<script defer src="/assets/purify.js"></script>
+<script defer src="/client/vendor/luogu-markdown-editor/luogu-parser.js"></script>
+<script defer src="/client/markdown.js"></script>
+<script defer src="/client/notifications.js"></script>
+<script defer src="/client/composer.js"></script>
+<script defer src="/socket.io/socket.io.js"></script>
+<script defer src="/client/chat.js"></script>
+</head><body><div id="chat-screen" class="chat-container">
+<aside id="conversation-sidebar" class="sidebar"><button id="sidebar-close" class="drawer-close" aria-label="收起聊天列表">×</button><div class="sidebar-top"><strong>BetterLanTalk</strong><span id="self-name"></span></div>
+<input id="conversation-search" placeholder="搜索好友、群聊" aria-label="搜索好友和群聊">
+<button id="discover-btn">查找公开群</button><div id="discover-panel" class="hidden"></div>
+<h3>好友与群聊</h3><div class="room-list" id="room-list"></div>
+<div class="sidebar-bottom"><button id="friend-requests-btn">好友申请 <span id="request-count"></span></button><div id="friend-requests" class="hidden"></div></div></aside>
+<div id="panel-backdrop" class="panel-backdrop hidden"></div><main class="main-content"><header class="chat-header"><div class="header-title"><button id="sidebar-toggle" class="panel-toggle" aria-controls="conversation-sidebar" aria-expanded="false">聊天</button><h2 id="current-room">默认聊天室 <span id="connection-status" class="connection-status status-disconnected">未连接</span></h2></div>
+<div class="header-actions"><button id="details-toggle" class="panel-toggle" aria-controls="chat-details" aria-expanded="false">成员 / 文件</button><button id="notify-btn">通知</button><button id="device-btn">通知设备</button><a id="admin-view-btn" class="hidden" href="/admin">管理</a><button id="logout-btn">退出</button></div></header>
+<div id="toast-container" class="toast-container"></div><div id="chat-view"><div class="chat-center">
+<div class="history-actions"><button id="older-messages">加载更早消息</button></div><div class="messages-container" id="messages-container"></div>
+<div class="typing-indicator" id="typing-indicator"></div><div id="upload-preview" class="upload-preview hidden"></div>
+            <div class="composer">
+                <div id="composer-resize" class="composer-resize" role="separator" aria-orientation="horizontal" aria-controls="composer-panes" aria-label="调节编辑区高度" tabindex="0" title="上下拖动调节高度，双击恢复默认；方向键也可调节"><span></span></div>
+                <div id="markdown-toolbar" class="markdown-toolbar" role="toolbar" aria-label="Luogu Markdown 编辑工具">
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="undo" title="撤销（Ctrl+Z）" aria-label="撤销（Ctrl+Z）" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="redo" title="重做（Ctrl+Y）" aria-label="重做（Ctrl+Y）" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"></path></svg></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="heading" title="标题" aria-label="标题" disabled><span style="font-weight: bold; font-size: 13px;">H</span>
+          </button>
+                    <button type="button" class="tool-btn" data-insert="bold" title="粗体（Ctrl+B）" aria-label="粗体（Ctrl+B）" disabled><strong style="font-size: 14px;">B</strong></button>
+                    <button type="button" class="tool-btn" data-insert="italic" title="斜体（Ctrl+I）" aria-label="斜体（Ctrl+I）" disabled><em style="font-size: 14px; font-style: italic;">I</em></button>
+                    <button type="button" class="tool-btn" data-insert="strike" title="删除线" aria-label="删除线" disabled><s style="font-size: 14px;">S</s></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="inline-code" title="行内代码" aria-label="行内代码" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></button>
+                    <button type="button" class="tool-btn" data-insert="code" title="代码块" aria-label="代码块" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg></button>
+                    <button type="button" class="tool-btn" data-insert="quote" title="引用" aria-label="引用" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="math" title="行内公式（Ctrl+M）" aria-label="行内公式（Ctrl+M）" disabled><span style="font-family: serif; font-size: 14px; font-weight: bold;">$</span></button>
+                    <button type="button" class="tool-btn" data-insert="math-block" title="行间公式（Ctrl+Shift+M）" aria-label="行间公式（Ctrl+Shift+M）" disabled><span style="font-family: serif; font-size: 13px; font-weight: bold;">$$</span></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="callout" title="折叠框" aria-label="折叠框" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          </button>
+                    <button type="button" class="tool-btn" data-insert="table" title="表格" aria-label="表格" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="12" y1="3" x2="12" y2="21"></line></svg></button>
+                    <button type="button" class="tool-btn" data-insert="epigraph" title="引言" aria-label="引言" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="align" title="居中排版" aria-label="居中排版" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="10" x2="6" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="18" y1="18" x2="6" y2="18"></line></svg>
+          </button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="link" title="插入链接" aria-label="插入链接" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="image" title="插入图片链接" aria-label="插入图片链接" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></button>
+                    <button type="button" class="tool-btn" data-insert="unordered-list" title="无序列表" aria-label="无序列表" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><circle cx="3.5" cy="6" r="1.5" fill="currentColor" stroke="none"></circle><circle cx="3.5" cy="12" r="1.5" fill="currentColor" stroke="none"></circle><circle cx="3.5" cy="18" r="1.5" fill="currentColor" stroke="none"></circle></svg></button>
+                    <button type="button" class="tool-btn" data-insert="ordered-list" title="有序列表" aria-label="有序列表" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M3 4h1v4" stroke-width="1.6"></path><path d="M2.6 14.2c0-.7.6-1.2 1.3-1.2s1.2.5 1.2 1.1c0 1.1-2.5 1.5-2.5 2.9h2.6" stroke-width="1.6"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="task" title="任务列表" aria-label="任务列表" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="hr" title="分割线" aria-label="分割线" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line></svg></button>
+                </div>
+                </div>
+                <div id="composer-panes" class="composer-panes">
+                    <section class="source-pane" aria-labelledby="source-pane-title">
+                        <div class="pane-header" id="source-pane-title">MARKDOWN 源代码</div>
+                        <div class="source-editor">
+                            <div id="line-numbers" class="line-numbers" aria-hidden="true"><div>1</div></div>
+                            <textarea id="message-input" class="message-input" aria-label="消息 Markdown 源代码" placeholder="输入 Markdown，右侧实时预览…" wrap="off" spellcheck="false" maxlength="20000" disabled></textarea>
+                        </div>
+                    </section>
+                    <section class="preview-pane" aria-labelledby="preview-pane-title">
+                        <div class="pane-header" id="preview-pane-title">实时预览</div>
+                        <div id="message-preview" class="markdown-content message-preview" aria-label="消息实时预览"></div>
+                    </section>
+                </div>
+                <div class="composer-footer">
+                    <input type="file" id="file-input" class="hidden" multiple>
+                    <button id="attach-btn" class="attach-button" title="发送文件（也可拖拽或 Ctrl+V 粘贴图片）" disabled>文件</button>
+                    <button type="button" class="syntax-help-button" onclick="showMarkdownHelp()">语法帮助</button>
+                    <span class="composer-hint">Enter 换行 · Ctrl+Enter 发送 · Ctrl+V 粘贴图片</span>
+                    <button id="send-button" title="发送（Ctrl+Enter）" class="send-button" disabled>发送</button>
+                </div>
+            </div>
+
+</div><aside id="chat-details" class="chat-details"><button id="details-close" class="drawer-close" aria-label="收起成员和文件栏">×</button><h3>聊天成员 <span id="online-count"></span></h3><div class="user-list" id="user-list"></div>
+<div class="friend-search"><h3>添加好友</h3><form id="people-search-form"><input id="people-search" placeholder="输入用户名" aria-label="查找用户"><button>查找</button></form><div id="people-results"></div></div>
+<div id="conversation-actions"></div><div id="file-panel" class="file-panel"><div class="file-panel-header"><span>聊天文件</span><button id="file-panel-toggle" title="收起文件栏">▾</button></div><div id="file-list" class="file-list"></div></div>
+</aside></div></main></div>    <!-- Markdown 帮助弹窗 -->
+    <div id="markdown-help" class="help-modal">
+        <button class="help-close" onclick="hideMarkdownHelp()">×</button>
+        <h3>Luogu Markdown 语法帮助</h3>
+        <div style="line-height: 1.8;">
+            <p><strong>粗体</strong>: **文本** 或 __文本__</p>
+            <p><em>斜体</em>: *文本* 或 _文本_</p>
+            <p><s>删除线</s>: ~~文本~~</p>
+            <p><code>行内代码</code>: `代码`</p>
+            <p>代码块:<br>```<br>多行代码<br>```</p>
+            <p>标题:<br># 一级标题<br>## 二级标题<br>### 三级标题</p>
+            <p>引用: &gt; 引用文本</p>
+            <p>无序列表: - 项目 或 * 项目</p>
+            <p>有序列表: 1. 项目</p>
+            <p>链接: [显示文本](https://example.com)</p>
+            <p>图片: ![图片描述](图片URL)</p>
+            <p>表格:<br>| 列1 | 列2 |<br>|-----|-----|<br>| 内容 | 内容 |</p>
+        </div>
+        <div class="luogu-help">
+            <p>公式：<code>$x^2$</code>；行间公式：<code>$$\sum_{i=1}^n i$$</code></p>
+            <p>代码块：<code>```cpp line-numbers lines=2</code>，以 <code>```</code> 结束。</p>
+            <p>折叠框：<code>:::info[标题]{open}</code>，另起一行写正文，以 <code>:::</code> 结束。也支持 success、warning、error 和嵌套。</p>
+            <p>表格合并：<code>^</code> 向上合并，<code>&lt;</code> 向左合并。</p>
+            <p>脚注：<code>文字[^1]</code>，另起一行定义 <code>[^1]: 注释</code>。</p>
+            <p>对齐：<code>:::align{center}</code> / <code>:::align{right}</code>；引言：<code>:::epigraph[作者]</code>。</p>
+            <p>视频：<code>![](bilibili:BV号)</code>，点击后加载播放器。</p>
+            <p>可用工具栏插入常用语法并预览。文件按钮、拖放和 Ctrl+V 图片粘贴仍可直接发送附件。</p>
+        </div>
+        <div style="margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
+            <strong>💡 提示：</strong>左侧编辑 Markdown，右侧实时预览；发送后消息区直接显示渲染结果。
+        </div>
+    </div>
+
+    <div id="overlay" class="help-overlay"></div>
+
+</body></html>

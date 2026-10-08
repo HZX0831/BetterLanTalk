@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const createNotifications = require('../../client/notifications');
-const html = fs.readFileSync(path.join(__dirname, '../../client/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../../client/chat.html'), 'utf8');
 
 function browser(t, { secure = true, permission = 'granted', unsupported = false, requestError = false, constructorError = false } = {}) {
   const dom = new JSDOM(html, { url: secure ? 'https://chat.example/' : 'http://192.168.1.2:3001/', runScripts: 'outside-only' });
@@ -16,6 +16,7 @@ function browser(t, { secure = true, permission = 'granted', unsupported = false
   window.document.hasFocus = () => state.focused;
   window.focus = () => { state.focused = true; };
   window.console.log = () => {};
+  window.matchMedia = () => ({ matches: false });
   if (!unsupported) {
     window.Notification = class {
       static permission = permission;
@@ -144,7 +145,7 @@ test('several tabs for one account suppress duplicate system notifications', asy
 
 function chatApp(t) {
   const fixture = browser(t);
-  const code = html.slice(html.indexOf('        const MessageType ='), html.indexOf('        // Markdown 帮助功能'));
+  const code = fs.readFileSync(path.join(__dirname, '../../client/chat.js'), 'utf8').split("document.addEventListener('DOMContentLoaded', async () => {")[0];
   fixture.window.eval(code.replace('class ChatApp', 'window.ChatApp = class ChatApp') + ';');
   const app = new fixture.window.ChatApp();
   const sent = [], listeners = new Map();
