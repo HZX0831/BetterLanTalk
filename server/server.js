@@ -6,6 +6,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { exec } = require('child_process');
 
 // Markdown 处理模块
 const marked = require('marked');
@@ -74,26 +75,33 @@ function generateId() {
     return 'id-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
 }
 
-// 获取本机IP地址
+// 获取本机内网IP地址（自动排除虚拟网卡/代理TUN网卡）
 function getLocalIP() {
     try {
         const interfaces = os.networkInterfaces();
+        const candidates = [];
         for (const name of Object.keys(interfaces)) {
             for (const interfaceInfo of interfaces[name]) {
                 if (interfaceInfo.family === 'IPv4' && !interfaceInfo.internal) {
-                    if (name.includes('Wi-Fi') || name.includes('WLAN') || name.includes('Ethernet') || name.includes('本地连接')) {
-                        return interfaceInfo.address;
-                    }
+                    candidates.push({ name, address: interfaceInfo.address });
                 }
             }
         }
-        for (const name of Object.keys(interfaces)) {
-            for (const interfaceInfo of interfaces[name]) {
-                if (interfaceInfo.family === 'IPv4' && !interfaceInfo.internal) {
-                    return interfaceInfo.address;
-                }
-            }
-        }
+
+        // 排除虚拟/代理类网卡（如 Clash/Mihomo 的 Meta、vEthernet、VMware、VPN 等）
+        const isVirtual = (name) =>
+            /virtual|vmware|virtualbox|hyper-?v|vethernet|wsl|docker|loopback|tun|tap|npcap|bluetooth|zerotier|tailscale|radmin|vpn|clash|mihomo|meta|proxy|虚拟|加速/i.test(name);
+        // 排除特殊/保留网段：198.18.0.0/15（基准测试，常见于代理TUN）、169.254（链路本地）
+        const isReserved = (ip) => /^198\.18\./.test(ip) || /^198\.19\./.test(ip) || /^169\.254\./.test(ip);
+        // 优先真实物理网卡名（含中文）
+        const isPreferred = (name) => /wi-?fi|wlan|无线|ethernet|以太网|本地连接/i.test(name);
+
+        const usable = candidates.filter(c => !isVirtual(c.name) && !isReserved(c.address));
+        const preferred = usable.filter(c => isPreferred(c.name));
+
+        if (preferred.length) return preferred[0].address;
+        if (usable.length) return usable[0].address;
+        if (candidates.length) return candidates[0].address;
     } catch (error) {
         console.log('获取IP地址失败:', error);
     }
@@ -123,10 +131,12 @@ if (!config.maxFileMB || isNaN(config.maxFileMB)) config.maxFileMB = 5120;   // 
 if (!config.maxUploadsMB || isNaN(config.maxUploadsMB)) config.maxUploadsMB = 20480; // 上传目录总上限 20GB
 config.maxFileMB = Number(config.maxFileMB);
 config.maxUploadsMB = Number(config.maxUploadsMB);
+if (typeof config.serverIP !== 'string') config.serverIP = '';   // 手动指定的对外IP，留空则自动检测
 saveJSON(CONFIG_FILE, {
     port: config.port,
     maxFileMB: config.maxFileMB,
-    maxUploadsMB: config.maxUploadsMB
+    maxUploadsMB: config.maxUploadsMB,
+    serverIP: config.serverIP
 });
 
 // 确保上传目录存在
@@ -220,7 +230,8 @@ const users = new Map();
 const rooms = new Map();
 const messages = new Map();
 const mutedIPs = new Set();
-const localIP = getLocalIP();
+// 对外IP：优先使用配置中手动指定的，否则自动检测
+let localIP = (config.serverIP && config.serverIP.trim()) || getLocalIP();
 
 // 离开提示延迟（毫秒）：页面刷新时可被下一次 join 取消，避免刷屏
 const LEAVE_DELAY = 8000;
@@ -551,7 +562,14 @@ app.delete('/api/users/:username', adminMiddleware, (req, res) => {
 
 // 服务器配置
 app.get('/api/config', adminMiddleware, (req, res) => {
-    res.json({ port: config.port, maxFileMB: config.maxFileMB, maxUploadsMB: config.maxUploadsMB, localIP });
+    res.json({
+        port: config.port,
+        maxFileMB: config.maxFileMB,
+        maxUploadsMB: config.maxUploadsMB,
+        serverIP: config.serverIP || '',
+        detectedIP: getLocalIP(),
+        localIP
+    });
 });
 
 // 公开的文件限制（供客户端上传前预校验）
@@ -579,7 +597,7 @@ app.get('/api/files', authMiddleware, (req, res) => {
 });
 
 app.put('/api/config', adminMiddleware, (req, res) => {
-    const { port, maxFileMB, maxUploadsMB } = req.body;
+    const { port, maxFileMB, maxUploadsMB, serverIP } = req.body;
     const updated = [];
 
     if (port !== undefined) {
@@ -589,6 +607,19 @@ app.put('/api/config', adminMiddleware, (req, res) => {
         }
         config.port = p;
         updated.push(`端口 ${p}（重启生效）`);
+    }
+    if (serverIP !== undefined) {
+        const ip = String(serverIP).trim();
+        const isValidIPv4 = (s) => {
+            const m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+            return !!m && m.slice(1).every(p => Number(p) >= 0 && Number(p) <= 255);
+        };
+        if (ip && !isValidIPv4(ip)) {
+            return res.status(400).json({ error: '对外IP格式无效，应为如 192.168.1.10，留空表示自动检测' });
+        }
+        config.serverIP = ip;
+        localIP = ip || getLocalIP();
+        updated.push(`对外IP ${localIP}`);
     }
     if (maxFileMB !== undefined) {
         const m = Number(maxFileMB);
@@ -613,7 +644,8 @@ app.put('/api/config', adminMiddleware, (req, res) => {
     saveJSON(CONFIG_FILE, {
         port: config.port,
         maxFileMB: config.maxFileMB,
-        maxUploadsMB: config.maxUploadsMB
+        maxUploadsMB: config.maxUploadsMB,
+        serverIP: config.serverIP
     });
     // 修改上限后立即按新上限清理一次
     cleanupUploads();
@@ -622,7 +654,9 @@ app.put('/api/config', adminMiddleware, (req, res) => {
         message: updated.length ? '已更新: ' + updated.join('、') : '无改动',
         port: config.port,
         maxFileMB: config.maxFileMB,
-        maxUploadsMB: config.maxUploadsMB
+        maxUploadsMB: config.maxUploadsMB,
+        serverIP: config.serverIP,
+        localIP
     });
 });
 
@@ -1314,6 +1348,19 @@ io.on('connection', (socket) => {
 });
 // 启动服务器
 const PORT = process.env.PORT || config.port || 3001;
+
+// 用系统默认浏览器打开指定地址（供一键启动脚本使用）
+function openBrowser(url) {
+    const cmd = process.platform === 'win32'
+        ? `start "" "${url}"`
+        : process.platform === 'darwin'
+            ? `open "${url}"`
+            : `xdg-open "${url}"`;
+    exec(cmd, (err) => {
+        if (err) console.log(`⚠️  未能自动打开浏览器，请手动访问: ${url}`);
+    });
+}
+
 server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
     console.log('🚀 BetterLanTalk 内网聊天室服务器已启动 v1.0.0');
@@ -1323,6 +1370,13 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(`📎 文件传输: 单文件上限 ${config.maxFileMB}MB / 目录总量 ${config.maxUploadsMB}MB（管理面板可调）`);
     console.log('================================');
     console.log('按 Ctrl+C 停止服务器');
+
+    // 由一键启动脚本设置该变量时，用本机内网地址自动打开浏览器
+    if (process.env.LANTALK_OPEN_BROWSER === '1') {
+        const url = `http://${localIP}:${PORT}/`;
+        console.log(`🖥️  正在打开浏览器: ${url}`);
+        openBrowser(url);
+    }
 });
 
 // 优雅关闭

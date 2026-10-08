@@ -5,7 +5,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0server"
 
 echo ========================================
-echo   LanTalk 内网聊天室 一键启动
+echo   BetterLanTalk 内网聊天室 一键启动
 echo ========================================
 echo.
 
@@ -39,9 +39,9 @@ echo.
 echo [信息] 正在启动服务器... 按 Ctrl+C 可停止
 echo.
 
-REM ---- 延迟打开浏览器（设置 LANTALK_NO_BROWSER=1 可跳过） ----
+REM ---- 自动打开浏览器：服务器启动后用本机内网 IP 打开（设置 LANTALK_NO_BROWSER=1 可跳过） ----
 if not "%LANTALK_NO_BROWSER%"=="1" (
-    start "" cmd /c "timeout /t 2 >nul & start http://localhost:3001/"
+    set "LANTALK_OPEN_BROWSER=1"
 )
 
 REM ---- 启动服务器 ----

@@ -969,6 +969,11 @@
                     <button class="success" onclick="adminAPI.savePort()">保存端口</button>
                     <div class="admin-meta">⚠️ 保存后需重启服务器才能生效</div>
                     <hr style="margin: 10px 0; border: none; border-top: 1px solid #eee;">
+                    <div>对外 IP: <strong id="current-server-ip">-</strong> <span class="admin-meta" id="detected-ip"></span></div>
+                    <input type="text" id="new-server-ip" placeholder="留空自动检测，如 192.168.1.10" style="width: 220px;">
+                    <button class="success" onclick="adminAPI.saveServerIP()">保存 IP</button>
+                    <div class="admin-meta">用于控制台与自动打开浏览器显示的地址；留空则自动检测网卡</div>
+                    <hr style="margin: 10px 0; border: none; border-top: 1px solid #eee;">
                     <div>单文件上限: <strong id="current-max-file">-</strong> MB</div>
                     <div>上传目录总上限: <strong id="current-max-uploads">-</strong> MB</div>
                     <input type="number" id="new-max-file" placeholder="单文件上限 (MB)" style="width: 180px;">
@@ -2121,6 +2126,10 @@
                     document.getElementById('current-port').textContent = cfg.port;
                     document.getElementById('current-max-file').textContent = cfg.maxFileMB;
                     document.getElementById('current-max-uploads').textContent = cfg.maxUploadsMB;
+                    document.getElementById('current-server-ip').textContent = cfg.localIP;
+                    document.getElementById('detected-ip').textContent = cfg.serverIP
+                        ? `（手动指定；自动检测为 ${cfg.detectedIP}）`
+                        : '（自动检测）';
                 } catch (e) {}
             },
             async savePort() {
@@ -2128,6 +2137,15 @@
                 try {
                     const r = await this.request('/api/config', { method: 'PUT', body: JSON.stringify({ port: p }) });
                     alert('✅ ' + r.message);
+                    this.loadConfig();
+                } catch (e) { alert('❌ ' + e.message); }
+            },
+            async saveServerIP() {
+                const ip = document.getElementById('new-server-ip').value.trim();
+                try {
+                    const r = await this.request('/api/config', { method: 'PUT', body: JSON.stringify({ serverIP: ip }) });
+                    alert('✅ ' + r.message);
+                    document.getElementById('new-server-ip').value = '';
                     this.loadConfig();
                 } catch (e) { alert('❌ ' + e.message); }
             },

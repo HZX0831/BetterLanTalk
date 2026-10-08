@@ -1,10 +1,10 @@
 #!/bin/bash
-# LanTalk 内网聊天室 一键启动脚本 (Linux / macOS)
+# BetterLanTalk 内网聊天室 一键启动脚本 (Linux / macOS)
 
 cd "$(dirname "$0")/server" || exit 1
 
 echo "================================"
-echo "  LanTalk 内网聊天室 一键启动"
+echo "  BetterLanTalk 内网聊天室 一键启动"
 echo "================================"
 echo
 
@@ -25,11 +25,9 @@ echo
 echo "[信息] 正在启动服务器... 按 Ctrl+C 可停止"
 echo
 
-# 设置 LANTALK_NO_BROWSER=1 可跳过自动打开浏览器
-if [ "$LANTALK_NO_BROWSER" != "1" ] && command -v xdg-open >/dev/null 2>&1; then
-    (sleep 2 && xdg-open "http://localhost:3001/") &
-elif [ "$LANTALK_NO_BROWSER" != "1" ] && command -v open >/dev/null 2>&1; then
-    (sleep 2 && open "http://localhost:3001/") &
+# 自动打开浏览器：服务器启动后用本机内网 IP 打开（设置 LANTALK_NO_BROWSER=1 可跳过）
+if [ "$LANTALK_NO_BROWSER" != "1" ]; then
+    export LANTALK_OPEN_BROWSER=1
 fi
 
 node server.js
