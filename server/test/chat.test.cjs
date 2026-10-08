@@ -17,7 +17,7 @@ async function readiness(base) {
   const info = await status.json();
   assert.equal(info.name, '内网聊天室服务器');
   assert.equal(info.status, 'running');
-  assert.equal(info.version, '1.1.0');
+  assert.equal(info.version, '1.1.1');
   for (const route of ['/', '/client/index.html', '/socket.io/socket.io.js', '/assets/katex/katex.min.js', '/assets/prism/prism.js', '/assets/purify.js', '/client/vendor/luogu-markdown-editor/luogu-parser.js']) {
     const r = await fetch(base + route, { signal: AbortSignal.timeout(3000) });
     assert.equal(r.status, 200, route);

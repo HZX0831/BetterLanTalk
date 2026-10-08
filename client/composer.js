@@ -5,6 +5,73 @@
         const preview = document.getElementById('message-preview');
         const gutter = document.getElementById('line-numbers');
         const toolbar = document.getElementById('markdown-toolbar');
+        const panes = document.getElementById('composer-panes');
+        const resizeHandle = document.getElementById('composer-resize');
+        const composer = panes.closest('.composer');
+        const column = composer.parentElement;
+        let preferredHeight = null;
+        try {
+            const saved = Number(localStorage.getItem('lantalk_composer_height'));
+            if (Number.isFinite(saved) && saved >= 60 && saved <= 5000) preferredHeight = saved;
+        } catch {}
+        const heightBounds = () => {
+            const controls = composer.getBoundingClientRect().height - panes.getBoundingClientRect().height;
+            const extras = Array.from(column.children).filter(el => el !== composer && el.id !== 'messages-container')
+                .reduce((sum, el) => sum + el.getBoundingClientRect().height, 0);
+            const max = Math.max(60, column.clientHeight - controls - extras - 120);
+            return { min: Math.min(140, max), max };
+        };
+        const fitHeight = (requested = preferredHeight ?? Math.max(220, Math.min(440, innerHeight * .38))) => {
+            if (!column.clientHeight) return null;
+            const { min, max } = heightBounds();
+            const height = Math.round(Math.max(min, Math.min(max, requested)));
+            panes.style.height = height + 'px';
+            resizeHandle.setAttribute('aria-valuemin', String(Math.round(min)));
+            resizeHandle.setAttribute('aria-valuemax', String(Math.round(max)));
+            resizeHandle.setAttribute('aria-valuenow', String(height));
+            resizeHandle.setAttribute('aria-valuetext', height + ' 像素');
+            return height;
+        };
+        const saveHeight = () => {
+            try { localStorage.setItem('lantalk_composer_height', String(preferredHeight)); } catch {}
+        };
+        let drag = null;
+        resizeHandle.addEventListener('pointerdown', e => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            drag = { id: e.pointerId, y: e.clientY, height: panes.getBoundingClientRect().height };
+            resizeHandle.setPointerCapture(e.pointerId);
+            document.body.classList.add('composer-resizing');
+        });
+        resizeHandle.addEventListener('pointermove', e => {
+            if (!drag || e.pointerId !== drag.id) return;
+            preferredHeight = fitHeight(drag.height + drag.y - e.clientY);
+        });
+        const finishResize = e => {
+            if (!drag || e.pointerId !== drag.id) return;
+            drag = null;
+            document.body.classList.remove('composer-resizing');
+            if (preferredHeight !== null) saveHeight();
+        };
+        ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(name => resizeHandle.addEventListener(name, finishResize));
+        resizeHandle.addEventListener('keydown', e => {
+            if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+            e.preventDefault();
+            const { min, max } = heightBounds();
+            const step = e.shiftKey ? 64 : 24;
+            const requested = e.key === 'Home' ? min : e.key === 'End' ? max : panes.getBoundingClientRect().height + (e.key === 'ArrowUp' ? step : -step);
+            preferredHeight = fitHeight(requested);
+            saveHeight();
+        });
+        resizeHandle.addEventListener('dblclick', () => {
+            preferredHeight = null;
+            try { localStorage.removeItem('lantalk_composer_height'); } catch {}
+            fitHeight();
+        });
+        if (typeof ResizeObserver === 'function') {
+            const observer = new ResizeObserver(() => fitHeight());
+            [column, toolbar, composer.querySelector('.composer-footer'), document.getElementById('upload-preview')].forEach(el => observer.observe(el));
+        } else window.addEventListener('resize', () => fitHeight());
         const render = createChatMarkdown({ LuoguParser, katex, Prism, DOMPurify });
         let timer;
         let syncingScroll = false;

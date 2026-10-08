@@ -19,6 +19,7 @@
                 file ? '../server/node_modules/dompurify/dist/purify.min.js' : '/assets/purify.js',
                 file ? './vendor/luogu-markdown-editor/luogu-parser.js' : '/client/vendor/luogu-markdown-editor/luogu-parser.js',
                 file ? './markdown.js' : '/client/markdown.js',
+                file ? './notifications.js' : '/client/notifications.js',
                 file ? './composer.js' : '/client/composer.js'
             ];
             window.Prism = { manual: true };
@@ -56,7 +57,7 @@
             使用说明:<br>
             1. 在浏览器中访问 <code>http://服务器IP:3001/</code> 即可<br>
             2. 首次使用请先注册账号（每个IP限注册一个）<br>
-            3. 按Enter发送，Shift+Enter换行<br>
+            3. Enter 换行，Ctrl+Enter 发送<br>
             4. 支持 Luogu Markdown 与公式预览<br>
             5. 支持多房间聊天<br>
             6. 支持文件传输：图片显示在消息中，其他文件在右侧栏；支持 Ctrl+V 粘贴图片，单文件与总量上限可在管理面板调整
@@ -127,6 +128,7 @@
             <div id="upload-preview" class="upload-preview hidden"></div>
 
             <div class="composer">
+                <div id="composer-resize" class="composer-resize" role="separator" aria-orientation="horizontal" aria-controls="composer-panes" aria-label="调节编辑区高度" tabindex="0" title="上下拖动调节高度，双击恢复默认；方向键也可调节"><span></span></div>
                 <div id="markdown-toolbar" class="markdown-toolbar" role="toolbar" aria-label="Luogu Markdown 编辑工具">
                 <div class="toolbar-group">
                     <button type="button" class="tool-btn" data-insert="undo" title="撤销（Ctrl+Z）" aria-label="撤销（Ctrl+Z）" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg></button>
@@ -170,7 +172,7 @@
                     <button type="button" class="tool-btn" data-insert="hr" title="分割线" aria-label="分割线" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line></svg></button>
                 </div>
                 </div>
-                <div class="composer-panes">
+                <div id="composer-panes" class="composer-panes">
                     <section class="source-pane" aria-labelledby="source-pane-title">
                         <div class="pane-header" id="source-pane-title">MARKDOWN 源代码</div>
                         <div class="source-editor">
@@ -187,8 +189,8 @@
                     <input type="file" id="file-input" class="hidden" multiple>
                     <button id="attach-btn" class="attach-button" title="发送文件（也可拖拽或 Ctrl+V 粘贴图片）" disabled>文件</button>
                     <button type="button" class="syntax-help-button" onclick="showMarkdownHelp()">语法帮助</button>
-                    <span class="composer-hint">Enter 发送 · Shift+Enter 换行 · Ctrl+V 粘贴图片</span>
-                    <button id="send-button" class="send-button" disabled>发送</button>
+                    <span class="composer-hint">Enter 换行 · Ctrl+Enter 发送 · Ctrl+V 粘贴图片</span>
+                    <button id="send-button" title="发送（Ctrl+Enter）" class="send-button" disabled>发送</button>
                 </div>
             </div>
             </div>
@@ -339,7 +341,19 @@
                 this.userRole = 'user';
                 this.authMode = 'login'; // 'login' | 'register'
                 this.serverOrigin = '';
-                this.notifyEnabled = localStorage.getItem('lantalk_notify') === 'on';
+                this.roomData = [];
+                this.notifications = new ChatNotifications({
+                    currentUser: () => this.currentUser,
+                    currentRoom: () => this.currentRoom,
+                    roomName: id => this.roomData.find(room => room.id === id)?.name || id,
+                    isViewingChat: () => !document.getElementById('chat-view').classList.contains('hidden'),
+                    openRoom: id => {
+                        if (document.getElementById('chat-view').classList.contains('hidden')) this.toggleAdminView();
+                        this.joinRoom(id);
+                    },
+                    onUnread: () => this.updateRoomUnread(),
+                    onHint: text => this.showToast(text)
+                });
                 this.pendingFiles = [];   // 待上传文件
                 this.uploading = false;
                 this.limits = { maxFileMB: 5120, maxUploadsMB: 20480 };
@@ -374,7 +388,7 @@
 
                 sendButton.addEventListener('click', () => this.sendMessage());
                 messageInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.isComposing && e.keyCode !== 229) {
                         e.preventDefault();
                         this.sendMessage();
                     }
@@ -550,42 +564,8 @@
             }
 
             // 通知
-            async toggleNotifications() {
-                if (!('Notification' in window)) {
-                    alert('当前浏览器不支持通知');
-                    return;
-                }
-                if (Notification.permission === 'granted') {
-                    this.notifyEnabled = !this.notifyEnabled;
-                } else {
-                    const perm = await Notification.requestPermission();
-                    this.notifyEnabled = perm === 'granted';
-                }
-                localStorage.setItem('lantalk_notify', this.notifyEnabled ? 'on' : 'off');
-                this.updateNotifyBtn();
-            }
-
-            updateNotifyBtn() {
-                const btn = document.getElementById('notify-btn');
-                btn.style.background = this.notifyEnabled && 'Notification' in window && Notification.permission === 'granted'
-                    ? '#e5e7eb' : '#fff';
-            }
-
-            maybeNotify(message) {
-                if (!this.notifyEnabled || Notification.permission !== 'granted') return;
-                if (!document.hidden) return;
-                if (message.username === this.currentUser) return;
-                let body;
-                if (message.type === 'text') {
-                    body = (message.content || '').replace(/[#*`>\[\]()~_-]/g, '').trim();
-                    if (body.length > 80) body = body.slice(0, 80) + '...';
-                } else if (message.type === 'file') {
-                    body = (message.isImage ? '📷 发送了图片: ' : '📎 发送了文件: ') + (message.name || '');
-                } else {
-                    return;
-                }
-                const n = new Notification(message.username, { body });
-                n.onclick = () => { window.focus(); n.close(); };
+            toggleNotifications() {
+                return this.notifications.toggle();
             }
 
             // 右上角限时提示
@@ -798,6 +778,7 @@
                 chatView.style.display = chatView.classList.contains('hidden') ? 'none' : 'flex';
                 document.getElementById('admin-view-btn').textContent = showingAdmin ? '💬 聊天' : '管理';
                 if (showingAdmin) adminAPI.refreshAll();
+                else this.notifications.markRead();
             }
 
             // 初始化房间事件
@@ -966,6 +947,7 @@
                     document.getElementById('typing-indicator').textContent = '';
                     this.showSystemMessage(`✅ 已加入房间: ${roomName} (${userCount}人在线)`);
                     
+                    this.notifications.markRead();
                     // 更新房间列表激活状态
                     this.updateRoomActiveState(roomId);
                     // 刷新右侧文件栏
@@ -981,9 +963,9 @@
 
                 // 接收消息
                 this.socket.on('message', (message) => {
+                    this.notifications.receive(message);
                     if (message.room && message.room !== this.currentRoom) return;
                     this.displayMessage(message);
-                    this.maybeNotify(message);
                     // 收到文件消息时立即刷新右侧文件栏
                     if (message.type === 'file') this.loadFilePanel();
                 });
@@ -1267,6 +1249,8 @@
 
             // 更新房间列表
             updateRoomList(rooms) {
+                this.roomData = rooms;
+                this.notifications.pruneRooms(rooms.map(room => room.id));
                 const roomList = document.getElementById('room-list');
                 console.log('更新房间列表，收到房间数:', rooms.length);
                 
@@ -1278,7 +1262,7 @@
                     const isActive = room.id === this.currentRoom;
                     roomElement.className = `room-item ${isActive ? 'active' : ''}`;
                     roomElement.dataset.roomId = room.id;
-                    roomElement.textContent = `${room.name} · ${room.isPublic ? '公开' : '私有'} (${room.userCount})`;
+                    roomElement.textContent = this.roomLabel(room);
 
                     roomElement.addEventListener('click', () => {
                         if (room.id !== this.currentRoom) {
@@ -1296,6 +1280,18 @@
                     defaultRoom.className = 'room-item active';
                     defaultRoom.innerHTML = '公共聊天室 (0)';
                     roomList.appendChild(defaultRoom);
+                }
+            }
+
+            roomLabel(room) {
+                const unread = this.notifications.unread.get(room.id) || 0;
+                return `${room.name} · ${room.isPublic ? '公开' : '私有'} (${room.userCount})${unread ? ` · ${unread} 条未读` : ''}`;
+            }
+
+            updateRoomUnread() {
+                for (const item of document.querySelectorAll('#room-list .room-item')) {
+                    const room = this.roomData.find(room => room.id === item.dataset.roomId);
+                    if (room) item.textContent = this.roomLabel(room);
                 }
             }
 
@@ -1665,7 +1661,6 @@
             if (location.protocol !== 'file:') {
                 document.getElementById('server-row').style.display = 'none';
             }
-            window.chatApp.updateNotifyBtn();
             window.chatApp.tryAutoLogin();
         });
     </script>
