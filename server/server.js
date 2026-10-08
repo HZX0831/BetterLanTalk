@@ -8,67 +8,8 @@ const path = require('path');
 const crypto = require('crypto');
 const { exec } = require('child_process');
 
-// Markdown 处理模块
-const marked = require('marked');
-const { JSDOM } = require('jsdom');
-const createDOMPurify = require('dompurify');
-
-const window = new JSDOM('').window;
-const DOMPurify = createDOMPurify(window);
-
-// 配置 marked
-marked.setOptions({
-  highlight: function(code, lang) {
-    return code;
-  },
-  breaks: true,
-  gfm: true,
-  tables: true,
-  sanitize: false
-});
-
-// Markdown 处理函数
-function processMarkdown(content) {
-  try {
-    const rawHtml = marked.parse(content);
-    const cleanHtml = DOMPurify.sanitize(rawHtml, {
-      ALLOWED_TAGS: [
-        'p', 'br', 'strong', 'em', 'u', 's', 'code', 'pre', 
-        'blockquote', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-        'a', 'img', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
-        'span', 'div'
-      ],
-      ALLOWED_ATTR: [
-        'href', 'target', 'rel', 'src', 'alt', 'title', 'class'
-      ],
-      ALLOWED_URI_REGEXP: /^(?:(?:(?:f|ht)tps?|mailto|tel):|[^a-z]|[a-z+.\-]+(?:[^a-z+.\-:]|$))/i
-    });
-    return cleanHtml;
-  } catch (error) {
-    console.error('Markdown processing error:', error);
-    return DOMPurify.sanitize(content);
-  }
-}
-
-// 检查是否包含Markdown语法
-function containsMarkdown(text) {
-  const markdownPatterns = [
-    /\*\*(.*?)\*\*/,
-    /\*(.*?)\*/,
-    /__(.*?)__/,
-    /~~(.*?)~~/,
-    /`(.*?)`/,
-    /```([\s\S]*?)```/m,
-    /\[(.*?)\]\((.*?)\)/,
-    /!\[(.*?)\]\((.*?)\)/,
-    /^#+\s+.+/m,
-    /^>\s+.+/m,
-    /^-\s+.+/m,
-    /^\d+\.\s+.+/m,
-    /\|.*\|/
-  ];
-  return markdownPatterns.some(pattern => pattern.test(text));
-}
+// 预览与消息共用新版 Luogu Markdown 解析器。
+const processMarkdown = require('./markdown');
 
 // 简单的ID生成器
 function generateId() {
@@ -372,7 +313,10 @@ function updateUserList(roomId) {
 // 中间件
 app.use(cors());
 app.use(express.json());
-app.use('/client', express.static('../client'));
+app.use('/client', express.static(path.join(__dirname, '../client')));
+app.use('/assets/katex', express.static(path.join(__dirname, 'node_modules/katex/dist')));
+app.use('/assets/prism', express.static(path.join(__dirname, 'node_modules/prismjs')));
+app.get('/assets/purify.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/dompurify/dist/purify.min.js')));
 app.use('/uploads', express.static(UPLOADS_DIR));
 
 // 创建默认房间
@@ -1227,17 +1171,18 @@ io.on('connection', (socket) => {
             return;
         }
         
-        if (!content.trim()) return;
+        if (typeof content !== 'string' || !content.trim() || content.length > 20000) return;
         
         // 处理 Markdown
-        const isMarkdown = containsMarkdown(content);
-        const processedContent = isMarkdown ? processMarkdown(content) : content;
+        const messageId = generateId();
+        const isMarkdown = true;
+        const processedContent = processMarkdown(content, messageId);
         
         const message = {
-            id: generateId(),
+            id: messageId,
             type: 'text',
             username: user.username,
-            content: content.trim(),
+            content,
             processedContent: processedContent,
             isMarkdown: isMarkdown,
             timestamp: Date.now(),

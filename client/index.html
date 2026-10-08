@@ -4,834 +4,32 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>BetterLanTalk 内网聊天室</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Microsoft YaHei', Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            height: 100vh;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-        
-        .chat-container {
-            width: 100%;
-            max-width: 1200px;
-            height: 90vh;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            display: flex;
-            overflow: hidden;
-        }
-        
-        .sidebar {
-            width: 280px;
-            background: #2c3e50;
-            color: white;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-        }
-        
-        .main-content {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            position: relative;
-        }
-        
-        .login-form {
-            text-align: center;
-            padding: 40px;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
-            width: 100%;
-            max-width: 400px;
-        }
-        
-        .login-form h1 {
-            margin-bottom: 30px;
-            color: #2c3e50;
-            font-size: 28px;
-        }
-        
-        .login-form input {
-            width: 100%;
-            padding: 15px;
-            margin: 10px 0;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            font-size: 16px;
-            outline: none;
-            transition: border-color 0.3s;
-        }
-        
-        .login-form input:focus {
-            border-color: #667eea;
-        }
-        
-        .login-form button {
-            width: 100%;
-            padding: 15px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            cursor: pointer;
-            transition: background 0.3s;
-            margin-top: 10px;
-        }
-        
-        .login-form button:hover {
-            background: #764ba2;
-        }
-        
-        .login-form button:disabled {
-            background: #bdc3c7;
-            cursor: not-allowed;
-        }
-        
-        .loading {
-            background: #95a5a6 !important;
-        }
-        
-        .chat-header {
-            background: #34495e;
-            color: white;
-            padding: 15px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        
-        .messages-container {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            background: #f8f9fa;
-        }
-        
-        .message {
-            margin-bottom: 15px;
-            padding: 12px 16px;
-            border-radius: 10px;
-            max-width: 70%;
-            word-wrap: break-word;
-            animation: fadeIn 0.3s ease-in;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .message.own {
-            background: #667eea;
-            color: white;
-            margin-left: auto;
-        }
-        
-        .message.other {
-            background: white;
-            border: 1px solid #ddd;
-        }
-        
-        .message.system {
-            background: #ffeaa7;
-            text-align: center;
-            max-width: 100%;
-            font-style: italic;
-            margin: 10px auto;
-            border: none;
-        }
-        
-        .message.error {
-            background: #ff6b6b;
-            color: white;
-            text-align: center;
-            max-width: 100%;
-            margin: 10px auto;
-            border: none;
-        }
-        
-        .message-header {
-            font-size: 12px;
-            opacity: 0.8;
-            margin-bottom: 5px;
-        }
-        
-        .input-area {
-            padding: 20px;
-            background: white;
-            border-top: 1px solid #eee;
-            display: flex;
-            gap: 10px;
-        }
-        
-        .message-input {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 8px;
-            outline: none;
-            resize: none;
-            font-family: inherit;
-            height: 60px;
-            font-size: 14px;
-        }
-        
-        .message-input:focus {
-            border-color: #667eea;
-        }
-        
-        .send-button {
-            padding: 12px 24px;
-            background: #667eea;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.3s;
-            height: 60px;
-            font-size: 14px;
-        }
-        
-        .send-button:hover {
-            background: #764ba2;
-        }
-        
-        .send-button:disabled {
-            background: #bdc3c7;
-            cursor: not-allowed;
-        }
-        
-        .user-list {
-            flex: 1;
-            margin-top: 20px;
-            overflow-y: auto;
-        }
-        
-        .user-item {
-            padding: 10px;
-            margin: 5px 0;
-            background: rgba(255,255,255,0.1);
-            border-radius: 5px;
-            display: flex;
-            align-items: center;
-        }
-        
-        .user-avatar {
-            width: 32px;
-            height: 32px;
-            background: #667eea;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-right: 10px;
-            font-weight: bold;
-            color: white;
-            font-size: 14px;
-        }
-        
-        .typing-indicator {
-            font-style: italic;
-            color: #7f8c8d;
-            padding: 10px 20px;
-            font-size: 14px;
-            min-height: 20px;
-            background: #f8f9fa;
-        }
-        
-        .room-list {
-            margin-bottom: 20px;
-        }
-        
-        .room-item {
-            padding: 10px;
-            margin: 5px 0;
-            background: rgba(255,255,255,0.1);
-            border-radius: 5px;
-            cursor: pointer;
-            transition: background 0.3s;
-        }
-        
-        .room-item:hover {
-            background: rgba(255,255,255,0.2);
-        }
-        
-        .room-item.active {
-            background: #667eea;
-        }
-        
-        .hidden {
-            display: none !important;
-        }
-
-        .server-info {
-            margin-top: 15px;
-            padding: 10px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 5px;
-            font-size: 12px;
-            line-height: 1.4;
-        }
-
-        .connection-status {
-            padding: 5px 10px;
-            border-radius: 15px;
-            font-size: 12px;
-            margin-left: 10px;
-        }
-        
-        .status-connected {
-            background: #27ae60;
-            color: white;
-        }
-        
-        .status-disconnected {
-            background: #e74c3c;
-            color: white;
-        }
-
-        .status-connecting {
-            background: #f39c12;
-            color: white;
-        }
-
-        /* 新增 Markdown 样式 */
-        .message.markdown-content {
-            line-height: 1.6;
-        }
-
-        .message.markdown-content h1,
-        .message.markdown-content h2,
-        .message.markdown-content h3,
-        .message.markdown-content h4,
-        .message.markdown-content h5,
-        .message.markdown-content h6 {
-            margin: 10px 0;
-            font-weight: bold;
-        }
-        
-        .message.markdown-content h1 { font-size: 1.4em; }
-        .message.markdown-content h2 { font-size: 1.3em; }
-        .message.markdown-content h3 { font-size: 1.2em; }
-        .message.markdown-content h4 { font-size: 1.1em; }
-        .message.markdown-content h5 { font-size: 1.0em; }
-        .message.markdown-content h6 { font-size: 0.9em; }
-        
-        .message.markdown-content p {
-            margin: 8px 0;
-        }
-        
-        .message.markdown-content code {
-            background: rgba(0, 0, 0, 0.1);
-            padding: 2px 6px;
-            border-radius: 3px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9em;
-        }
-        
-        .message.markdown-content pre {
-            background: rgba(0, 0, 0, 0.05);
-            padding: 12px;
-            border-radius: 6px;
-            overflow-x: auto;
-            margin: 10px 0;
-            border-left: 4px solid #667eea;
-        }
-        
-        .message.markdown-content pre code {
-            background: none;
-            padding: 0;
-        }
-        
-        .message.markdown-content blockquote {
-            border-left: 4px solid #ddd;
-            padding-left: 16px;
-            margin: 10px 0;
-            color: #666;
-            font-style: italic;
-        }
-        
-        .message.markdown-content ul,
-        .message.markdown-content ol {
-            margin: 8px 0;
-            padding-left: 24px;
-        }
-        
-        .message.markdown-content li {
-            margin: 4px 0;
-        }
-        
-        .message.markdown-content table {
-            border-collapse: collapse;
-            margin: 10px 0;
-            width: 100%;
-        }
-        
-        .message.markdown-content table th,
-        .message.markdown-content table td {
-            border: 1px solid #ddd;
-            padding: 8px 12px;
-            text-align: left;
-        }
-        
-        .message.markdown-content table th {
-            background: rgba(0, 0, 0, 0.05);
-            font-weight: bold;
-        }
-        
-        .message.markdown-content a {
-            color: #667eea;
-            text-decoration: none;
-        }
-        
-        .message.markdown-content a:hover {
-            text-decoration: underline;
-        }
-        
-        .message.markdown-content img {
-            max-width: 100%;
-            height: auto;
-            border-radius: 6px;
-            margin: 5px 0;
-        }
-        
-        .message.markdown-content strong {
-            font-weight: bold;
-        }
-        
-        .message.markdown-content em {
-            font-style: italic;
-        }
-        
-        .message.markdown-content u {
-            text-decoration: underline;
-        }
-        
-        .message.markdown-content s {
-            text-decoration: line-through;
-        }
-
-        /* Markdown 提示 */
-        .markdown-hint {
-            font-size: 12px;
-            color: #888;
-            margin-top: 5px;
-            text-align: right;
-        }
-        
-        .markdown-hint a {
-            color: #667eea;
-            text-decoration: none;
-        }
-        
-        .markdown-hint a:hover {
-            text-decoration: underline;
-        }
-
-        /* 弹窗样式 */
-        .help-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.5);
-            z-index: 999;
-        }
-
-        .help-modal {
-            display: none;
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: white;
-            padding: 25px;
-            border-radius: 12px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-            z-index: 1000;
-            max-width: 500px;
-            max-height: 80vh;
-            overflow-y: auto;
-            font-size: 14px;
-        }
-
-        .help-modal h3 {
-            margin-top: 0;
-            color: #2c3e50;
-            border-bottom: 2px solid #667eea;
-            padding-bottom: 10px;
-        }
-
-        .help-close {
-            float: right;
-            background: #dc3545;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 12px;
-        }
-
-        /* 多房间功能样式 */
-        .room-item {
-            padding: 10px;
-            margin: 5px 0;
-            background: rgba(255,255,255,0.1);
-            border-radius: 5px;
-            cursor: pointer;
-            transition: background 0.3s;
-            font-size: 14px;
-        }
-
-        .room-item:hover {
-            background: rgba(255,255,255,0.2);
-        }
-
-        .room-item.active {
-            background: #667eea;
-            font-weight: bold;
-        }
-
-        .room-item .room-info {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .room-item .user-count {
-            font-size: 11px;
-            opacity: 0.8;
-            background: rgba(0,0,0,0.2);
-            padding: 2px 6px;
-            border-radius: 10px;
-        }
-
-        /* 房间创建表单样式 */
-        #room-create-form {
-            transition: all 0.3s ease;
-        }
-
-        #room-create-form input {
-            background: rgba(255,255,255,0.9);
-            border: 1px solid rgba(255,255,255,0.3);
-            color: #2c3e50;
-        }
-
-        #room-create-form input::placeholder {
-            color: #7f8c8d;
-        }
-
-        #room-create-form button {
-            transition: background 0.3s;
-        }
-
-        #room-create-form button:hover {
-            opacity: 0.9;
-        }
-
-        /* 新建房间按钮样式 */
-        #create-room-btn {
-            transition: all 0.3s ease;
-            margin-left: 10px;
-        }
-
-        #create-room-btn:hover {
-            background: #219a52 !important;
-            transform: scale(1.05);
-        }
-
-        /* 房间列表标题容器 */
-        .sidebar h3 {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-
-        /* 登录页标签按钮 */
-        .tab-btn {
-            flex: 1;
-            padding: 10px;
-            border: 2px solid #667eea;
-            background: white;
-            color: #667eea;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 15px;
-        }
-        .tab-btn.active {
-            background: #667eea;
-            color: white;
-        }
-
-        /* 管理视图按钮 */
-        #admin-view-btn {
-            background: #f39c12;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            padding: 5px 12px;
-            cursor: pointer;
-            font-size: 13px;
-        }
-
-        /* 管理面板样式 */
-        .admin-section {
-            background: white;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 15px;
-        }
-        .admin-section h3 { margin-bottom: 10px; color: #2c3e50; }
-        .admin-section input, .admin-section textarea {
-            padding: 8px; margin: 4px 0; border: 1px solid #ccc; border-radius: 4px; font-size: 14px;
-        }
-        .admin-section button {
-            background: #007bff; color: white; border: none; border-radius: 4px;
-            padding: 8px 14px; cursor: pointer; margin: 2px; font-size: 13px;
-        }
-        .admin-section button.danger { background: #dc3545; }
-        .admin-section button.secondary { background: #6c757d; }
-        .admin-section button.success { background: #28a745; }
-        .admin-item {
-            padding: 10px; margin: 6px 0; background: #f8f9fa; border-radius: 6px;
-            display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;
-        }
-        .admin-meta { font-size: 12px; color: #6c757d; }
-        .muted-tag { color: #dc3545; font-weight: bold; }
-
-        /* ===== 文件传输样式 ===== */
-        .attach-button {
-            padding: 0 16px;
-            height: 60px;
-            background: #95a5a6;
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 20px;
-            transition: background 0.3s;
-        }
-        .attach-button:hover { background: #7f8c8d; }
-        .attach-button:disabled { background: #bdc3c7; cursor: not-allowed; }
-
-        .upload-preview {
-            padding: 8px 20px;
-            background: #eef2ff;
-            border-top: 1px solid #dde3ff;
-            font-size: 13px;
-            color: #4a5568;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .upload-preview .upload-item {
-            background: white;
-            border: 1px solid #ccd4f0;
-            border-radius: 6px;
-            padding: 4px 10px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .upload-preview .upload-item.remove {
-            cursor: pointer;
-            color: #e74c3c;
-            font-weight: bold;
-        }
-        .upload-preview .upload-status { color: #667eea; }
-
-        /* 右侧文件栏 */
-        .file-panel {
-            width: 250px;
-            background: #f4f6f8;
-            border-left: 1px solid #e1e6ea;
-            display: flex;
-            flex-direction: column;
-            min-height: 0;
-            transition: width 0.25s;
-        }
-        .file-panel.collapsed { width: 42px; }
-        .file-panel.collapsed .file-list,
-        .file-panel.collapsed .file-panel-title { display: none; }
-        .file-panel.collapsed .file-panel-header {
-            justify-content: center;
-            padding: 12px 4px;
-        }
-        .file-panel-header {
-            padding: 12px 10px;
-            font-weight: bold;
-            color: #2c3e50;
-            font-size: 14px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            white-space: nowrap;
-        }
-        #file-panel-toggle {
-            border: none;
-            background: transparent;
-            cursor: pointer;
-            font-size: 14px;
-            color: #667eea;
-            flex-shrink: 0;
-        }
-        .file-list { flex: 1; overflow-y: auto; padding: 0 10px 10px; }
-        .file-empty { color: #95a5a6; font-size: 13px; text-align: center; padding: 20px 0; }
-        .file-entry {
-            background: white;
-            border: 1px solid #e1e6ea;
-            border-radius: 8px;
-            padding: 8px 10px;
-            margin-bottom: 8px;
-            font-size: 13px;
-        }
-        .file-entry .file-name {
-            font-weight: bold;
-            color: #2c3e50;
-            word-break: break-all;
-            margin-bottom: 3px;
-        }
-        .file-entry .file-meta { color: #95a5a6; font-size: 11px; margin-bottom: 6px; }
-        .file-entry .file-actions { display: flex; gap: 6px; }
-        .file-entry .file-actions a, .file-entry .file-actions button {
-            font-size: 12px;
-            padding: 3px 10px;
-            border-radius: 4px;
-            border: none;
-            cursor: pointer;
-            text-decoration: none;
-            background: #667eea;
-            color: white;
-        }
-        .file-entry.expired { opacity: 0.65; border-style: dashed; }
-        .file-entry.expired .file-name { color: #95a5a6; text-decoration: line-through; }
-        .expired-tag {
-            display: inline-block;
-            background: #ffeaa7;
-            color: #b8860b;
-            border-radius: 4px;
-            padding: 1px 6px;
-            font-size: 11px;
-            margin-left: 4px;
-        }
-
-        /* 消息里的文件/图片 */
-        .message .msg-file-card {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: rgba(255,255,255,0.15);
-            border-radius: 8px;
-            padding: 10px;
-        }
-        .message.other .msg-file-card { background: #f1f3f5; }
-        .message .msg-file-card .file-icon { font-size: 26px; }
-        .message .msg-file-card .file-info { flex: 1; min-width: 0; }
-        .message .msg-file-card .file-info .fname { font-weight: bold; word-break: break-all; }
-        .message .msg-file-card .file-info .fmeta { font-size: 11px; opacity: 0.75; }
-        .message .msg-file-card a.dl {
-            background: #667eea;
-            color: white;
-            padding: 5px 12px;
-            border-radius: 6px;
-            text-decoration: none;
-            font-size: 13px;
-            white-space: nowrap;
-        }
-        .message .msg-image img {
-            max-width: 100%;
-            max-height: 320px;
-            border-radius: 8px;
-            cursor: zoom-in;
-            display: block;
-        }
-        .message .expired-media {
-            background: rgba(0,0,0,0.08);
-            border: 1px dashed #bbb;
-            border-radius: 8px;
-            padding: 14px;
-            color: #888;
-            font-size: 13px;
-        }
-
-        /* 右上角限时提示（用户进出等） */
-        .toast-container {
-            position: absolute;
-            top: 62px;
-            right: 16px;
-            z-index: 900;
-            display: flex;
-            flex-direction: column;
-            align-items: flex-end;
-            gap: 8px;
-            pointer-events: none;
-            max-width: 280px;
-        }
-        .toast {
-            background: rgba(44, 62, 80, 0.92);
-            color: white;
-            padding: 8px 14px;
-            border-radius: 18px;
-            font-size: 13px;
-            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
-            animation: toastIn 0.25s ease-out;
-            transition: opacity 0.4s, transform 0.4s;
-            pointer-events: auto;
-            word-break: break-all;
-        }
-        .toast.hide { opacity: 0; transform: translateX(24px); }
-        @keyframes toastIn {
-            from { opacity: 0; transform: translateX(30px); }
-            to { opacity: 1; transform: translateX(0); }
-        }
-
-        /* 响应式设计 */
-        @media (max-width: 768px) {
-            .chat-container {
-                flex-direction: column;
-                height: 95vh;
-            }
-            
-            .sidebar {
-                width: 100%;
-                height: 200px;
-            }
-            
-            .message {
-                max-width: 85%;
-            }
-
-            /* 小屏时文件栏横向铺满（折叠态收起高度） */
-            #chat-view { flex-direction: column; }
-            .file-panel { width: 100%; max-height: 180px; border-left: none; border-top: 1px solid #e1e6ea; }
-            .file-panel.collapsed { width: 100%; max-height: 40px; overflow: hidden; }
-        }
-    </style>
+    <script>
+        (function () {
+            const file = location.protocol === 'file:';
+            const css = file ? './styles.css' : '/client/styles.css';
+            const katexBase = file ? '../server/node_modules/katex/dist/' : '/assets/katex/';
+            const prismBase = file ? '../server/node_modules/prismjs/' : '/assets/prism/';
+            document.write('<link rel="stylesheet" href="' + css + '">');
+            document.write('<link rel="stylesheet" href="' + katexBase + 'katex.min.css">');
+            document.write('<link rel="stylesheet" href="' + prismBase + 'themes/prism.css">');
+            const scripts = [
+                katexBase + 'katex.min.js', prismBase + 'prism.js',
+                ...['c', 'cpp', 'python', 'bash', 'json', 'java', 'rust', 'go', 'pascal', 'latex'].map(lang => prismBase + 'components/prism-' + lang + '.min.js'),
+                file ? '../server/node_modules/dompurify/dist/purify.min.js' : '/assets/purify.js',
+                file ? './vendor/luogu-markdown-editor/luogu-parser.js' : '/client/vendor/luogu-markdown-editor/luogu-parser.js',
+                file ? './markdown.js' : '/client/markdown.js',
+                file ? './composer.js' : '/client/composer.js'
+            ];
+            window.Prism = { manual: true };
+            scripts.forEach(src => document.write('<script src="' + src + '"><\/script>'));
+        })();
+    </script>
 </head>
 <body>
     <!-- 登录界面 -->
     <div id="login-screen" class="login-form">
-        <h1>💬 BetterLanTalk</h1>
+        <h1>BetterLanTalk</h1>
 
         <div style="display: flex; gap: 10px; margin-bottom: 15px;">
             <button id="tab-login" class="tab-btn active">登录</button>
@@ -855,13 +53,13 @@
         <div id="auth-error" style="color: #e74c3c; margin-top: 10px; font-size: 13px; min-height: 18px;"></div>
 
         <div class="server-info">
-            💡 使用说明:<br>
+            使用说明:<br>
             1. 在浏览器中访问 <code>http://服务器IP:3001/</code> 即可<br>
             2. 首次使用请先注册账号（每个IP限注册一个）<br>
             3. 按Enter发送，Shift+Enter换行<br>
-            4. 📝 支持Markdown语法<br>
-            5. 🏠 支持多房间聊天<br>
-            6. 📎 支持文件传输：图片显示在消息中，其他文件在右侧栏；支持 Ctrl+V 粘贴图片，单文件与总量上限可在管理面板调整
+            4. 支持 Luogu Markdown 与公式预览<br>
+            5. 支持多房间聊天<br>
+            6. 支持文件传输：图片显示在消息中，其他文件在右侧栏；支持 Ctrl+V 粘贴图片，单文件与总量上限可在管理面板调整
         </div>
     </div>
 
@@ -869,8 +67,8 @@
     <div id="chat-screen" class="chat-container hidden">
         <!-- 侧边栏 -->
         <div class="sidebar">
-            <h3>💬 聊天室 
-                <button id="create-room-btn" style="background: #27ae60; color: white; border: none; border-radius: 3px; padding: 2px 8px; font-size: 12px; cursor: pointer;">+ 新建</button>
+            <h3>聊天室
+                <button id="create-room-btn" style="background: #374151; color: white; border: none; border-radius: 3px; padding: 2px 8px; font-size: 12px; cursor: pointer;">+ 新建</button>
             </h3>
             
             <!-- 房间创建表单 -->
@@ -878,8 +76,8 @@
                 <input type="text" id="new-room-id" placeholder="房间ID" style="width: 100%; padding: 5px; margin-bottom: 5px; border: none; border-radius: 3px;">
                 <input type="text" id="new-room-name" placeholder="房间名称(可选)" style="width: 100%; padding: 5px; margin-bottom: 5px; border: none; border-radius: 3px;">
                 <div style="display: flex; gap: 5px;">
-                    <button onclick="createRoom()" style="flex: 1; background: #27ae60; color: white; border: none; border-radius: 3px; padding: 5px; cursor: pointer; font-size: 12px;">创建</button>
-                    <button onclick="cancelCreateRoom()" style="flex: 1; background: #95a5a6; color: white; border: none; border-radius: 3px; padding: 5px; cursor: pointer; font-size: 12px;">取消</button>
+                    <button onclick="createRoom()" style="flex: 1; background: #374151; color: white; border: none; border-radius: 3px; padding: 5px; cursor: pointer; font-size: 12px;">创建</button>
+                    <button onclick="cancelCreateRoom()" style="flex: 1; background: #6b7280; color: white; border: none; border-radius: 3px; padding: 5px; cursor: pointer; font-size: 12px;">取消</button>
                 </div>
             </div>
             
@@ -887,7 +85,7 @@
                 <div class="room-item active">公共聊天室 (0)</div>
             </div>
             
-            <h3>👥 在线用户</h3>
+            <h3>在线用户</h3>
             <div class="user-list" id="user-list">
                 <div class="user-item">
                     <div class="user-avatar">你</div>
@@ -903,9 +101,9 @@
             <div class="chat-header">
                 <h2 id="current-room">公共聊天室 <span id="connection-status" class="connection-status status-disconnected">未连接</span></h2>
                 <div style="display: flex; align-items: center; gap: 8px;">
-                    <button id="notify-btn" title="开启浏览器通知" style="background: rgba(255,255,255,0.15); color: white; border: none; border-radius: 5px; padding: 5px 10px; cursor: pointer; font-size: 13px;">🔔 通知</button>
+                    <button id="notify-btn" title="开启浏览器通知" style="background: rgba(255,255,255,0.15); color: white; border: none; border-radius: 5px; padding: 5px 10px; cursor: pointer; font-size: 13px;">通知</button>
                     <button id="logout-btn" title="退出登录" style="background: rgba(255,255,255,0.15); color: white; border: none; border-radius: 5px; padding: 5px 10px; cursor: pointer; font-size: 13px;">退出</button>
-                    <button id="admin-view-btn" class="hidden">🛡️ 管理</button>
+                    <button id="admin-view-btn" class="hidden">管理</button>
                     <div id="online-count">在线: 1人</div>
                 </div>
             </div>
@@ -918,7 +116,7 @@
                 <div class="message system">
                     欢迎来到内网聊天室！支持Markdown语法、多房间和文件传输。
                     <div class="markdown-hint">
-                        <a href="javascript:void(0)" onclick="showMarkdownHelp()">📝 查看Markdown语法帮助</a>
+                        <a href="javascript:void(0)" onclick="showMarkdownHelp()">查看语法帮助</a>
                     </div>
                 </div>
             </div>
@@ -927,18 +125,70 @@
 
             <div id="upload-preview" class="upload-preview hidden"></div>
 
-            <div class="input-area">
-                <input type="file" id="file-input" class="hidden" multiple>
-                <button id="attach-btn" class="attach-button" title="发送文件（也可拖拽或 Ctrl+V 粘贴图片）">📎</button>
-                <textarea 
-                    id="message-input" 
-                    class="message-input" 
-                    placeholder="输入消息... 支持Markdown语法 (按Enter发送，Shift+Enter换行)" 
-                    rows="3"
-                    maxlength="2000"
-                    disabled
-                ></textarea>
-                <button id="send-button" class="send-button" disabled>发送</button>
+            <div class="composer">
+                <div id="markdown-toolbar" class="markdown-toolbar" role="toolbar" aria-label="Luogu Markdown 编辑工具">
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="undo" title="撤销（Ctrl+Z）" aria-label="撤销（Ctrl+Z）" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7v6h6"></path><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="redo" title="重做（Ctrl+Y）" aria-label="重做（Ctrl+Y）" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 7v6h-6"></path><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 2.7"></path></svg></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="heading" title="标题" aria-label="标题" disabled><span style="font-weight: bold; font-size: 13px;">H</span>
+          </button>
+                    <button type="button" class="tool-btn" data-insert="bold" title="粗体（Ctrl+B）" aria-label="粗体（Ctrl+B）" disabled><strong style="font-size: 14px;">B</strong></button>
+                    <button type="button" class="tool-btn" data-insert="italic" title="斜体（Ctrl+I）" aria-label="斜体（Ctrl+I）" disabled><em style="font-size: 14px; font-style: italic;">I</em></button>
+                    <button type="button" class="tool-btn" data-insert="strike" title="删除线" aria-label="删除线" disabled><s style="font-size: 14px;">S</s></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="inline-code" title="行内代码" aria-label="行内代码" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg></button>
+                    <button type="button" class="tool-btn" data-insert="code" title="代码块" aria-label="代码块" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg></button>
+                    <button type="button" class="tool-btn" data-insert="quote" title="引用" aria-label="引用" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="math" title="行内公式（Ctrl+M）" aria-label="行内公式（Ctrl+M）" disabled><span style="font-family: serif; font-size: 14px; font-weight: bold;">$</span></button>
+                    <button type="button" class="tool-btn" data-insert="math-block" title="行间公式（Ctrl+Shift+M）" aria-label="行间公式（Ctrl+Shift+M）" disabled><span style="font-family: serif; font-size: 13px; font-weight: bold;">$$</span></button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="callout" title="折叠框" aria-label="折叠框" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+          </button>
+                    <button type="button" class="tool-btn" data-insert="table" title="表格" aria-label="表格" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="12" y1="3" x2="12" y2="21"></line></svg></button>
+                    <button type="button" class="tool-btn" data-insert="epigraph" title="引言" aria-label="引言" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21c3 0 7-1 7-8V5c0-1.25-.756-2.017-2-2H4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path><path d="M15 21c3 0 7-1 7-8V5c0-1.25-.757-2.017-2-2h-4c-1.25 0-2 .75-2 1.972V11c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 .008-1 1.031V20c0 1 0 1 1 1z"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="align" title="居中排版" aria-label="居中排版" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="10" x2="6" y2="10"></line><line x1="21" y1="6" x2="3" y2="6"></line><line x1="21" y1="14" x2="3" y2="14"></line><line x1="18" y1="18" x2="6" y2="18"></line></svg>
+          </button>
+                </div>
+                <span class="toolbar-divider" aria-hidden="true"></span>
+                <div class="toolbar-group">
+                    <button type="button" class="tool-btn" data-insert="link" title="插入链接" aria-label="插入链接" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="image" title="插入图片链接" aria-label="插入图片链接" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg></button>
+                    <button type="button" class="tool-btn" data-insert="unordered-list" title="无序列表" aria-label="无序列表" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><circle cx="3.5" cy="6" r="1.5" fill="currentColor" stroke="none"></circle><circle cx="3.5" cy="12" r="1.5" fill="currentColor" stroke="none"></circle><circle cx="3.5" cy="18" r="1.5" fill="currentColor" stroke="none"></circle></svg></button>
+                    <button type="button" class="tool-btn" data-insert="ordered-list" title="有序列表" aria-label="有序列表" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"></line><line x1="10" y1="12" x2="21" y2="12"></line><line x1="10" y1="18" x2="21" y2="18"></line><path d="M3 4h1v4" stroke-width="1.6"></path><path d="M2.6 14.2c0-.7.6-1.2 1.3-1.2s1.2.5 1.2 1.1c0 1.1-2.5 1.5-2.5 2.9h2.6" stroke-width="1.6"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="task" title="任务列表" aria-label="任务列表" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"></polyline><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg></button>
+                    <button type="button" class="tool-btn" data-insert="hr" title="分割线" aria-label="分割线" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line></svg></button>
+                </div>
+                </div>
+                <div class="composer-panes">
+                    <section class="source-pane" aria-labelledby="source-pane-title">
+                        <div class="pane-header" id="source-pane-title">MARKDOWN 源代码</div>
+                        <div class="source-editor">
+                            <div id="line-numbers" class="line-numbers" aria-hidden="true"><div>1</div></div>
+                            <textarea id="message-input" class="message-input" aria-label="消息 Markdown 源代码" placeholder="输入 Markdown，右侧实时预览…" wrap="off" spellcheck="false" maxlength="20000" disabled></textarea>
+                        </div>
+                    </section>
+                    <section class="preview-pane" aria-labelledby="preview-pane-title">
+                        <div class="pane-header" id="preview-pane-title">实时预览</div>
+                        <div id="message-preview" class="markdown-content message-preview" aria-label="消息实时预览"></div>
+                    </section>
+                </div>
+                <div class="composer-footer">
+                    <input type="file" id="file-input" class="hidden" multiple>
+                    <button id="attach-btn" class="attach-button" title="发送文件（也可拖拽或 Ctrl+V 粘贴图片）" disabled>文件</button>
+                    <button type="button" class="syntax-help-button" onclick="showMarkdownHelp()">语法帮助</button>
+                    <span class="composer-hint">Enter 发送 · Shift+Enter 换行 · Ctrl+V 粘贴图片</span>
+                    <button id="send-button" class="send-button" disabled>发送</button>
+                </div>
             </div>
             </div>
 
@@ -1025,7 +275,7 @@
     <!-- Markdown 帮助弹窗 -->
     <div id="markdown-help" class="help-modal">
         <button class="help-close" onclick="hideMarkdownHelp()">×</button>
-        <h3>📝 Markdown 语法帮助</h3>
+        <h3>Luogu Markdown 语法帮助</h3>
         <div style="line-height: 1.8;">
             <p><strong>粗体</strong>: **文本** 或 __文本__</p>
             <p><em>斜体</em>: *文本* 或 _文本_</p>
@@ -1040,18 +290,28 @@
             <p>图片: ![图片描述](图片URL)</p>
             <p>表格:<br>| 列1 | 列2 |<br>|-----|-----|<br>| 内容 | 内容 |</p>
         </div>
+        <div class="luogu-help">
+            <p>公式：<code>$x^2$</code>；行间公式：<code>$$\sum_{i=1}^n i$$</code></p>
+            <p>代码块：<code>```cpp line-numbers lines=2</code>，以 <code>```</code> 结束。</p>
+            <p>折叠框：<code>:::info[标题]{open}</code>，另起一行写正文，以 <code>:::</code> 结束。也支持 success、warning、error 和嵌套。</p>
+            <p>表格合并：<code>^</code> 向上合并，<code>&lt;</code> 向左合并。</p>
+            <p>脚注：<code>文字[^1]</code>，另起一行定义 <code>[^1]: 注释</code>。</p>
+            <p>对齐：<code>:::align{center}</code> / <code>:::align{right}</code>；引言：<code>:::epigraph[作者]</code>。</p>
+            <p>视频：<code>![](bilibili:BV号)</code>，点击后加载播放器。</p>
+            <p>可用工具栏插入常用语法并预览。文件按钮、拖放和 Ctrl+V 图片粘贴仍可直接发送附件。</p>
+        </div>
         <div style="margin-top: 20px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
-            <strong>💡 提示：</strong>输入消息时自动检测Markdown语法并实时渲染。
+            <strong>💡 提示：</strong>左侧编辑 Markdown，右侧实时预览；发送后消息区直接显示渲染结果。
         </div>
     </div>
 
     <div id="overlay" class="help-overlay"></div>
 
     <script>
-        // 优先使用服务器本地加载的 socket.io 客户端，file:// 方式打开时回退到 CDN
+        // 从服务器或完整检出的本地依赖加载，不需要外网 CDN。
         (function() {
             var src = (location.protocol === 'file:')
-                ? 'https://cdn.socket.io/4.7.2/socket.io.min.js'
+                ? '../server/node_modules/socket.io/client-dist/socket.io.js'
                 : '/socket.io/socket.io.js';
             document.write('<script src="' + src + '"><\/script>');
         })();
@@ -1111,8 +371,8 @@
                 });
 
                 sendButton.addEventListener('click', () => this.sendMessage());
-                messageInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
+                messageInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
                         e.preventDefault();
                         this.sendMessage();
                     }
@@ -1127,7 +387,7 @@
                 });
                 messageInput.addEventListener('paste', (e) => this.handlePaste(e));
                 const dropZone = document.querySelector('.messages-container');
-                dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.outline = '2px dashed #667eea'; });
+                dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.outline = '2px dashed #6b7280'; });
                 dropZone.addEventListener('dragleave', () => { dropZone.style.outline = ''; });
                 dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.style.outline = ''; this.handleDrop(e); });
                 document.getElementById('file-panel-toggle').addEventListener('click', () => {
@@ -1286,8 +546,8 @@
 
             updateNotifyBtn() {
                 const btn = document.getElementById('notify-btn');
-                btn.style.background = this.notifyEnabled && Notification.permission === 'granted'
-                    ? '#27ae60' : 'rgba(255,255,255,0.15)';
+                btn.style.background = this.notifyEnabled && 'Notification' in window && Notification.permission === 'granted'
+                    ? '#e5e7eb' : '#fff';
             }
 
             maybeNotify(message) {
@@ -1512,7 +772,7 @@
                 adminView.classList.toggle('hidden');
                 chatView.classList.toggle('hidden');
                 chatView.style.display = chatView.classList.contains('hidden') ? 'none' : 'flex';
-                document.getElementById('admin-view-btn').textContent = showingAdmin ? '💬 聊天' : '🛡️ 管理';
+                document.getElementById('admin-view-btn').textContent = showingAdmin ? '💬 聊天' : '管理';
                 if (showingAdmin) adminAPI.refreshAll();
             }
 
@@ -1793,8 +1053,9 @@
                 const attachBtn = document.getElementById('attach-btn');
                 
                 messageInput.disabled = false;
+                document.querySelectorAll('#markdown-toolbar button').forEach(button => { button.disabled = false; });
                 attachBtn.disabled = false;
-                messageInput.placeholder = '输入消息... 支持Markdown语法 (按Enter发送，Shift+Enter换行)';
+                messageInput.placeholder = '输入 Markdown，右侧实时预览…';
                 this.updateSendButtonState();
             }
 
@@ -1805,6 +1066,7 @@
                 const attachBtn = document.getElementById('attach-btn');
                 
                 messageInput.disabled = true;
+                document.querySelectorAll('#markdown-toolbar button').forEach(button => { button.disabled = true; });
                 attachBtn.disabled = true;
                 messageInput.placeholder = '与服务器断开连接，无法发送消息';
                 sendButton.disabled = true;
@@ -1813,9 +1075,9 @@
             // 发送消息
             sendMessage() {
                 const messageInput = document.getElementById('message-input');
-                const content = messageInput.value.trim();
+                const content = messageInput.value;
 
-                if (!content || !this.socket || !this.isConnected) return;
+                if (!content.trim() || !this.socket || !this.isConnected) return;
 
                 this.socket.emit('send_message', {
                     content: content,
@@ -1824,6 +1086,8 @@
 
                 // 清空输入框
                 messageInput.value = '';
+                messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+                messageInput.dispatchEvent(new Event('message-sent'));
                 this.updateSendButtonState();
                 
                 // 停止输入状态
@@ -1904,7 +1168,6 @@
                     content = `
                         <div class="message-header">
                             ${this.escapeHtml(message.username)} • ${time}
-                            ${message.isMarkdown ? '<span style="font-size:12px;color:#667eea;">📝 Markdown</span>' : ''}
                         </div>
                         <div class="message-content">${messageContent}</div>
                     `;
@@ -1953,7 +1216,7 @@
                     const displayName = isCurrentUser ? `${user.username} (你)` : user.username;
                     
                     userElement.innerHTML = `
-                        <div class="user-avatar" style="${isCurrentUser ? 'background: #27ae60;' : ''}">${avatar}</div>
+                        <div class="user-avatar" style="${isCurrentUser ? 'background: #374151;' : ''}">${avatar}</div>
                         <div class="user-info">
                             <div class="username">${this.escapeHtml(displayName)}</div>
                         </div>
