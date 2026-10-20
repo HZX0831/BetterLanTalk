@@ -124,7 +124,7 @@ function addUser(username, password, role, registeredIp) {
         passwordHash: hashPassword(password, salt),
         role,
         registeredIp: registeredIp || '',
-        boundIp: registeredIp || '',
+        boundIp: role === 'superadmin' ? '' : registeredIp || '',
         createdAt: Date.now()
     };
     userStore.users.push(user);
@@ -215,6 +215,8 @@ if (!userStore.users.length) {
 } else if (!userStore.users.some(u => u.role === 'superadmin')) {
     const initial = userStore.users.find(u => u.role === 'admin') || userStore.users[0];
     initial.role = 'superadmin';
+    // A previous registration binding is not this account's first superadmin login.
+    initial.boundIp = '';
 }
 for (const account of userStore.users) {
     if (!account.id) account.id = crypto.randomUUID();

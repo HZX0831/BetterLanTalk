@@ -6,7 +6,8 @@ const password = 'ip-policy-password';
 test('one account per actual device IP, including initial superadmin login, tokens, files and sockets', { timeout: 15000 }, async t => {
   const users = ['admin', 'alice', 'bob'].map((username, index) => ({ username, role: index ? 'user' : 'admin',
     salt: username, passwordHash: crypto.scryptSync(password, username, 64).toString('hex'),
-    registeredIp: index === 0 ? '127.0.0.90' : index === 1 ? '127.0.0.3' : '', createdAt: index + 1 }));
+    registeredIp: index === 0 ? '127.0.0.90' : index === 1 ? '127.0.0.3' : '',
+    ...(index === 0 ? { boundIp: '127.0.0.90' } : {}), createdAt: index + 1 }));
   const f = await fixture({ 'users.json': { users, tokens: { 'old-admin-token': { username: 'admin', expiresAt: Date.now() + 60000 } } } }); t.after(f.cleanup);
   const login = (username, sourceIp, status = 200, secret = password) => f.api('/api/login', null, { method: 'POST', sourceIp, status, body: { username, password: secret } });
   const readUsers = () => JSON.parse(fs.readFileSync(path.join(f.dir, 'users.json'), 'utf8')).users;
@@ -36,4 +37,23 @@ test('one account per actual device IP, including initial superadmin login, toke
   const replacement = await f.api('/api/register', null, { method: 'POST', sourceIp: '127.0.0.3', body: { username: 'replacement', password } });
   assert.equal((await f.api('/api/me', replacement.token)).boundIp, '127.0.0.3');
   assert.equal(new Set(readUsers().map(user => user.boundIp)).size, readUsers().length);
+});
+
+test('fresh superadmin binds only after first successful password login and keeps its IP across restarts', { timeout: 15000 }, async t => {
+  const f = await fixture(); t.after(f.cleanup);
+  const readAdmin = () => JSON.parse(fs.readFileSync(path.join(f.dir, 'users.json'), 'utf8')).users.find(user => user.role === 'superadmin');
+  const login = (sourceIp, status = 200, password = 'admin123') => f.api('/api/login', null,
+    { method: 'POST', sourceIp, status, body: { username: 'admin', password } });
+  assert.equal(readAdmin().boundIp, '');
+  await login('127.0.0.8', 401, 'wrong-password');
+  assert.equal(readAdmin().boundIp, '');
+  const admin = await login('127.0.0.9');
+  assert.equal(readAdmin().boundIp, '127.0.0.9');
+  await login('127.0.0.8', 403);
+  await f.api('/api/me', admin.token, { sourceIp: '127.0.0.8', status: 403 });
+  await f.stop(); await f.start();
+  assert.equal(readAdmin().boundIp, '127.0.0.9');
+  await login('127.0.0.8', 403);
+  await login('127.0.0.9');
+  assert.equal(readAdmin().boundIp, '127.0.0.9');
 });
