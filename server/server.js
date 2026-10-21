@@ -505,7 +505,7 @@ app.get('/admin', adminMiddleware, (req, res) => {
 app.get('/api/status', (req, res) => {
     res.json({
         name: '内网聊天室服务器',
-        version: '1.1.1',
+        version: '1.2.0',
         status: 'running',
         serverIP: localIP,
         port: PORT,
@@ -1260,7 +1260,7 @@ function openBrowser(url) {
 
 server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
-    console.log('🚀 BetterLanTalk 内网聊天室服务器已启动 v1.1.1');
+    console.log('🚀 BetterLanTalk 内网聊天室服务器已启动 v1.2.0');
     console.log(`📍 本地访问: http://localhost:${PORT}`);
     console.log(`🌐 内网访问: http://${localIP}:${PORT}`);
     console.log(`💬 聊天室: http://${localIP}:${PORT}/`);

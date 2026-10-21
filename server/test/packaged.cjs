@@ -48,6 +48,7 @@ const { receive } = require('./fixture.cjs');
   }
   try {
     await start();
+    assert.equal((await api('/api/status')).version, require('../package.json').version);
     assert.ok(fs.existsSync(path.join(data, 'users.json')));
     assert.deepEqual(fs.readdirSync(cwd), []);
     assert.match(await api('/'), /BetterLanTalk/);

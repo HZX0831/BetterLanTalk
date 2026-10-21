@@ -18,7 +18,7 @@ async function readiness(base) {
   const info = await status.json();
   assert.equal(info.name, '内网聊天室服务器');
   assert.equal(info.status, 'running');
-  assert.equal(info.version, '1.1.1');
+  assert.equal(info.version, '1.2.0');
   for (const route of ['/', '/client/index.html', '/socket.io/socket.io.js', '/client/login.js', '/client/login.css']) {
     const r = await request(base + route, { signal: AbortSignal.timeout(3000) });
     assert.equal(r.status, 200, route);
