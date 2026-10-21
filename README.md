@@ -77,6 +77,23 @@ admin / =Aa1357924680
 
 升级已有安装时，原来的初始管理员自动升级为超级管理员，用户名、密码与账号数据保留。
 
+### Windows 独立程序
+
+Windows 10/11 x64 可使用 `BetterLanTalk-win-x64.exe`，无需安装 Node.js。将程序放在有写入权限的文件夹，双击启动，程序会打开浏览器并在控制台显示内网访问地址。关闭控制台或按 Ctrl+C 停止服务；其他电脑仍通过浏览器访问服务器地址。
+
+程序已包含聊天页面、Markdown 编辑器、公式字体、代码高亮及 Socket.IO。账号、配置、消息和上传文件保存在 exe 旁自动生成的 `data/` 目录。升级时关闭旧程序、替换 exe 并保留 `data/`；从源码版迁移时，将 `server/` 下的运行时 JSON、相关备份及 `uploads/` 复制到 `data/`。不要复制 `node_modules/`。需要指定其他存储位置时可设置 `LANTALK_DATA_DIR`；设置 `LANTALK_OPEN_BROWSER=0` 可禁用自动打开浏览器。
+
+开发者重新构建需要 Node.js 22 或更新版本，在 `server/` 中执行：
+
+```bash
+npm ci
+npm run bundle
+```
+
+产物为仓库根目录 `dist/BetterLanTalk-win-x64.exe`。首次构建需要联网下载打包工具的 Node.js 运行时，运行 exe 不需要联网下载依赖。打包采用维护中的 `@yao-pkg/pkg`，使用 Node.js 22 运行时；构建时只嵌入程序及静态资源，不包含现有账号、聊天记录、上传文件或端口配置。
+
+`npm run bundle:linux` 可生成 Linux x64 独立程序，并使用 `npm run test:bundle` 验证启动、资源、消息和持久化。在 Windows 上也可用 `npm run test:bundle` 验证已构建的 exe。
+
 ### 客户端使用
 
 1. 浏览器直接访问 `http://<服务器IP>:3001/`（无需下载任何 html）

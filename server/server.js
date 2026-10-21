@@ -56,13 +56,18 @@ const app = express();
 const server = http.createServer(app);
 
 // ============ 配置与账号存储 ============
-const CONFIG_FILE = path.join(__dirname, 'config.json');
-const USERS_FILE = path.join(__dirname, 'users.json');
-const FILES_FILE = path.join(__dirname, 'files.json');
-const ROOMS_FILE = path.join(__dirname, 'rooms.json');
-const SOCIAL_FILE = path.join(__dirname, 'social.json');
-const MESSAGES_FILE = path.join(__dirname, 'messages.json');
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+// Bundled resources are read-only; keep portable data next to the executable.
+const DATA_DIR = process.env.LANTALK_DATA_DIR
+    ? path.resolve(process.env.LANTALK_DATA_DIR)
+    : process.pkg ? path.join(path.dirname(process.execPath), 'data') : __dirname;
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const FILES_FILE = path.join(DATA_DIR, 'files.json');
+const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
+const SOCIAL_FILE = path.join(DATA_DIR, 'social.json');
+const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
 function loadJSON(file, def) {
     try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) {
@@ -1263,8 +1268,8 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
     console.log('按 Ctrl+C 停止服务器');
 
-    // 由一键启动脚本设置该变量时，用本机内网地址自动打开浏览器
-    if (process.env.LANTALK_OPEN_BROWSER === '1') {
+    // Portable executables open the browser by default; scripts can opt in as before.
+    if (process.env.LANTALK_OPEN_BROWSER === '1' || (process.pkg && process.env.LANTALK_OPEN_BROWSER !== '0' && process.env.LANTALK_NO_BROWSER !== '1')) {
         const url = `http://${localIP}:${PORT}/`;
         console.log(`🖥️  正在打开浏览器: ${url}`);
         openBrowser(url);
