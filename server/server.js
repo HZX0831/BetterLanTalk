@@ -84,7 +84,7 @@ config.maxFileMB = Number(config.maxFileMB);
 config.maxUploadsMB = Number(config.maxUploadsMB);
 if (typeof config.serverIP !== 'string') config.serverIP = '';   // 手动指定的对外IP，留空则自动检测
 config.jiyuEnabled = config.jiyuEnabled === true;
-config.jiyuPort = Number.isInteger(config.jiyuPort) && config.jiyuPort > 0 && config.jiyuPort <= 65535 ? config.jiyuPort : 4705;
+config.jiyuPort = Number.isInteger(config.jiyuPort) && config.jiyuPort > 0 && config.jiyuPort <= 65535 ? config.jiyuPort : 4988;
 saveJSON(CONFIG_FILE, {
     jiyuEnabled: config.jiyuEnabled, jiyuPort: config.jiyuPort,
     port: config.port,
@@ -210,8 +210,8 @@ function superadminMiddleware(req, res, next) {
 }
 // Preserve existing accounts and passwords; promote the initial administrator once.
 if (!userStore.users.length) {
-    addUser('admin', 'admin123', 'superadmin', '');
-    console.log('已创建初始超级管理员 admin / admin123，请登录后修改密码');
+    addUser('admin', '=Aa1357924680', 'superadmin', '');
+    console.log('已创建初始超级管理员 admin，请登录后修改密码');
 } else if (!userStore.users.some(u => u.role === 'superadmin')) {
     const initial = userStore.users.find(u => u.role === 'admin') || userStore.users[0];
     initial.role = 'superadmin';

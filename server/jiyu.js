@@ -30,9 +30,9 @@ function buildMessagePacket(text) {
     return packet;
 }
 
-// Deliberately preserve the requested "flie" spelling and exclude message details.
+// Fixed notification kinds exclude message details and file names.
 function formatJiyuMessage(message = {}) {
-    const kind = message.type === 'file' ? (message.isImage ? 'new picture' : 'new flie') : 'new message';
+    const kind = message.type === 'file' ? (message.isImage ? 'new picture' : 'new file') : 'new message';
     const sender = String(message.username || '系统').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 20) || '系统';
     return `from ${sender}: ${kind}`;
 }

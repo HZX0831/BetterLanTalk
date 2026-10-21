@@ -176,6 +176,32 @@ test('editor reserves Enter for newlines and Ctrl/Command+Enter for sending, inc
   window.clearTimeout(app.typingTimeout);
 });
 
+test('internal image and link drags cannot resend files; external drops and clipboard uploads still work', t => {
+  const { window, app, input } = chatApp(t);
+  const uploaded = []; app.uploadFile = file => uploaded.push(file);
+  const zone = window.document.querySelector('.messages-container');
+  const file = new window.File(['image'], 'image.png', { type: 'image/png' });
+  function drag(type, target, files = []) {
+    const event = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { files, dropEffect: 'copy' } });
+    target.dispatchEvent(event); return event;
+  }
+  for (const target of [window.document.getElementById('messages-container'), window.document.getElementById('message-preview')]) {
+    const image = window.document.createElement('img'); target.append(image);
+    assert.equal(drag('dragstart', image).defaultPrevented, true);
+  }
+  const link = window.document.createElement('a'); link.href = '/uploads/image.png'; zone.append(link);
+  drag('dragstart', link);
+  const over = drag('dragover', zone); assert.equal(over.dataTransfer.dropEffect, 'none');
+  drag('drop', zone, [file]); assert.equal(uploaded.length, 0);
+  drag('drop', zone, [file]); assert.deepEqual(uploaded, [file]);
+  drag('dragstart', link); drag('dragend', link);
+  drag('drop', zone, [file]); assert.equal(uploaded.length, 2);
+  const paste = new window.Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, 'clipboardData', { value: { files: [file] } });
+  input.dispatchEvent(paste); assert.equal(paste.defaultPrevented, true); assert.equal(uploaded.length, 3);
+});
+
 test('messages in another room reach notification handling without entering the active chat', async t => {
   const { window, app, listeners } = chatApp(t);
   const displayed = []; app.displayMessage = msg => displayed.push(msg);

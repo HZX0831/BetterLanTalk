@@ -95,7 +95,7 @@ async function smoke() {
     const login = await api('/api/login', { method: 'POST', body: { username: 'onboarding', password: 'smoke-test-only' } });
     assert.equal((await api('/api/me', { token: login.token })).username, 'onboarding');
     await api('/api/accounts', { token: login.token, status: 403 });
-    const admin = await api('/api/login', { method: 'POST', body: { username: 'admin', password: 'admin123' } });
+    const admin = await api('/api/login', { method: 'POST', body: { username: 'admin', password: '=Aa1357924680' } });
     assert.equal(admin.role, 'superadmin');
     assert.ok((await api('/api/accounts', { token: admin.token })).some(u => u.username === 'onboarding'));
     console.log('PASS: registration, login, identity and administrator authorization');

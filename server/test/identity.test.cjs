@@ -42,12 +42,15 @@ test('one account per actual device IP, including initial superadmin login, toke
 test('fresh superadmin binds only after first successful password login and keeps its IP across restarts', { timeout: 15000 }, async t => {
   const f = await fixture(); t.after(f.cleanup);
   const readAdmin = () => JSON.parse(fs.readFileSync(path.join(f.dir, 'users.json'), 'utf8')).users.find(user => user.role === 'superadmin');
-  const login = (sourceIp, status = 200, password = 'admin123') => f.api('/api/login', null,
+  const login = (sourceIp, status = 200, password = '=Aa1357924680') => f.api('/api/login', null,
     { method: 'POST', sourceIp, status, body: { username: 'admin', password } });
   assert.equal(readAdmin().boundIp, '');
+  await login('127.0.0.8', 401, 'admin123');
   await login('127.0.0.8', 401, 'wrong-password');
   assert.equal(readAdmin().boundIp, '');
   const admin = await login('127.0.0.9');
+  assert.equal((await f.api('/api/config', admin.token)).jiyuPort, 4988);
+  await f.api('/api/config', admin.token, { method: 'PUT', body: { jiyuPort: 4999 } });
   assert.equal(readAdmin().boundIp, '127.0.0.9');
   await login('127.0.0.8', 403);
   await f.api('/api/me', admin.token, { sourceIp: '127.0.0.8', status: 403 });
@@ -55,5 +58,6 @@ test('fresh superadmin binds only after first successful password login and keep
   assert.equal(readAdmin().boundIp, '127.0.0.9');
   await login('127.0.0.8', 403);
   await login('127.0.0.9');
+  assert.equal((await f.api('/api/config', admin.token)).jiyuPort, 4999);
   assert.equal(readAdmin().boundIp, '127.0.0.9');
 });

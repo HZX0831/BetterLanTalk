@@ -33,6 +33,7 @@
                 });
                 this.pendingFiles = [];   // 待上传文件
                 this.uploading = false;
+                this.internalDrag = false;
                 this.limits = { maxFileMB: 5120, maxUploadsMB: 20480 };
                 this.expiredFiles = new Set();
 
@@ -63,7 +64,22 @@
                 });
                 messageInput.addEventListener('paste', (e) => this.handlePaste(e));
                 const dropZone = document.querySelector('.messages-container');
-                dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.outline = '2px dashed #6b7280'; });
+                // Browser image drags may expose a File, but must not resend chat attachments.
+                document.addEventListener('dragstart', (e) => {
+                    this.internalDrag = true;
+                    if (e.target.closest?.('.messages-container img, #message-preview img')) {
+                        e.preventDefault();
+                        this.internalDrag = false;
+                    }
+                }, true);
+                const endDrag = () => { this.internalDrag = false; dropZone.style.outline = ''; };
+                document.addEventListener('dragend', endDrag);
+                document.addEventListener('drop', endDrag);
+                dropZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    if (this.internalDrag) { e.dataTransfer.dropEffect = 'none'; return; }
+                    dropZone.style.outline = '2px dashed #6b7280';
+                });
                 dropZone.addEventListener('dragleave', () => { dropZone.style.outline = ''; });
                 dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.style.outline = ''; this.handleDrop(e); });
                 document.getElementById('file-panel-toggle').addEventListener('click', () => {
@@ -133,6 +149,7 @@
             }
 
             handleDrop(e) {
+                if (this.internalDrag) return;
                 const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
                 files.forEach(f => this.uploadFile(f));
             }

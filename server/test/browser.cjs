@@ -51,6 +51,33 @@ fs.mkdirSync(artifactDir, { recursive: true });
   await page.evaluate(async ()=>{const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;canvas.getContext('2d').fillRect(0,0,1,1);const blob=await new Promise(r=>canvas.toBlob(r,'image/png'));await navigator.clipboard.write([new ClipboardItem({'image/png':blob})]);});
   await page.focus('#message-input');await page.keyboard.press('Control+V');
   await second.waitForSelector('.msg-image img');await second.waitForFunction(()=>{const img=document.querySelector('.msg-image img');return img.complete&&img.naturalWidth===1;});
+  // A native drag of an existing chat image must never start another upload.
+  let dragUploads = 0;
+  const countUpload = request => { if (request.url().includes('/api/upload') && request.method() === 'POST') dragUploads++; };
+  page.on('request', countUpload);
+  await page.bringToFront();
+  await page.waitForFunction(() => { const image = document.querySelector('.msg-image img'); return image?.complete && image.naturalWidth === 1; });
+  await page.evaluate(() => {
+    window.imageDragCancelled = false;
+    document.addEventListener('dragstart', e => { if (e.target.closest?.('.msg-image img')) window.imageDragCancelled = e.defaultPrevented; });
+    const image = document.querySelector('.msg-image img'); image.style.width = '60px'; image.style.height = '60px';
+  });
+  await page.locator('.msg-image img').scrollIntoViewIfNeeded();
+  const dragImage = await page.locator('.msg-image img').boundingBox();
+  const dragX = dragImage.x + dragImage.width / 2, dragY = dragImage.y + dragImage.height / 2;
+  await page.mouse.move(dragX, dragY); await page.mouse.down(); await page.mouse.move(dragX + 15, dragY + 8, { steps: 8 }); await page.mouse.up();
+  assert.equal(await page.evaluate(() => window.imageDragCancelled), true);
+  assert.equal(dragUploads, 0);
+  assert.equal(await second.locator('.msg-image img').count(), 1);
+  // File-system drops still upload after the cancelled internal drag.
+  await page.evaluate(async () => {
+    const blob = await (await fetch(document.querySelector('.msg-image img').src)).blob();
+    const transfer = new DataTransfer(); transfer.items.add(new File([blob], 'dropped-image.png', { type: 'image/png' }));
+    document.querySelector('.messages-container').dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+  });
+  await second.waitForFunction(() => document.querySelectorAll('.msg-image img').length === 2);
+  assert.equal(dragUploads, 1); page.off('request', countUpload);
+  console.log('PASS: native chat image drag cannot resend, external file drop and Ctrl+V image upload still work');
   await page.setInputFiles('#file-input',{name:'browser-upload.txt',mimeType:'text/plain',buffer:Buffer.from('browser file test')});
   await second.waitForSelector('.file-entry:has-text("browser-upload.txt")');
   const link=second.locator('.msg-file-card a.dl');await link.waitFor();assert.equal(await (await context.request.get(await link.getAttribute('href'))).text(),'browser file test');
@@ -102,7 +129,8 @@ fs.mkdirSync(artifactDir, { recursive: true });
   assert.ok((await page.locator('#messages-container').boundingBox()).height>=120);
   await page.reload();await page.waitForFunction(()=>window.chatApp?.isConnected);await page.waitForFunction(height=>Math.abs(document.getElementById('composer-panes').getBoundingClientRect().height-height)<2,resizedHeight);
   await page.locator('#composer-resize').focus();await page.keyboard.press('ArrowDown');assert.ok((await page.locator('#composer-panes').boundingBox()).height<=resizedHeight-20);
-  await page.setViewportSize({width:1440,height:620});await page.waitForTimeout(100);
+  await page.setViewportSize({width:1440,height:620});
+  await page.waitForFunction(() => document.getElementById('send-button').getBoundingClientRect().bottom <= innerHeight && document.getElementById('messages-container').getBoundingClientRect().height >= 119);
   const smallFooter=await page.locator('#send-button').boundingBox();assert.ok(smallFooter.y+smallFooter.height<=620);assert.ok((await page.locator('#messages-container').boundingBox()).height>=119);
   await page.setViewportSize({width:1440,height:1000});await page.locator('#composer-resize').dblclick();await page.waitForTimeout(100);assert.ok(Math.abs((await page.locator('#composer-panes').boundingBox()).height-originalHeight)<2);
   // Actual Chromium permission grant and Notification construction (OS popup appearance cannot be observed headlessly).
@@ -116,7 +144,7 @@ fs.mkdirSync(artifactDir, { recursive: true });
   const adminContext=await browser.newContext({viewport:{width:1440,height:1000}});
   const adminPage=await adminContext.newPage();adminPage.on('pageerror',e=>errors.push(e.message));
   adminPage.on('dialog',dialog=>dialog.accept());
-  await adminPage.goto(adminBase);await adminPage.fill('#username-input','admin');await adminPage.fill('#password-input','admin123');await adminPage.click('#auth-button');
+  await adminPage.goto(adminBase);await adminPage.fill('#username-input','admin');await adminPage.fill('#password-input','=Aa1357924680');await adminPage.click('#auth-button');
   await adminPage.waitForFunction(()=>window.chatApp?.isConnected && window.chatApp.userRole==='superadmin');
   await page.fill('#people-search','admin');await page.locator('#people-search-form button').click();
   await page.locator('#people-results button:has-text("加好友")').click();
