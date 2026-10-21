@@ -1,0 +1,113 @@
+name: Build release executables
+
+on:
+  push:
+    branches: [feat/jiyu-popup-notification]
+    paths: [.github/workflows/release.yml]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag (defaults to the package version)
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-executables-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: bundle
+            asset: BetterLanTalk-win-x64.exe
+          - os: ubuntu-latest
+            script: bundle:linux
+            asset: BetterLanTalk-linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Select the tagged source
+        id: version
+        shell: bash
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${REQUESTED_TAG:-v$(node -p "require('./server/package.json').version")}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git rev-parse --verify "refs/tags/$tag"
+          git checkout --detach "refs/tags/$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm --prefix server ci --no-audit --no-fund
+      - run: npm --prefix server test
+      - name: Build the executable
+        shell: bash
+        env:
+          BUILD_SCRIPT: ${{ matrix.script }}
+        run: npm --prefix server run "$BUILD_SCRIPT"
+      - run: npm --prefix server run test:bundle
+      - name: Hash the executable
+        shell: bash
+        working-directory: dist
+        env:
+          ASSET: ${{ matrix.asset }}
+        run: sha256sum "$ASSET" > "$ASSET.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: executable-${{ runner.os }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.asset }}.sha256
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ needs.build.outputs.tag }}
+      RELEASE_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: executable-*
+          merge-multiple: true
+          path: dist
+      - name: Check hashes and upload release assets
+        shell: bash
+        working-directory: dist
+        run: |
+          cat ./*.sha256 > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          gh release upload "$RELEASE_TAG" BetterLanTalk-win-x64.exe BetterLanTalk-linux-x64 SHA256SUMS.txt --repo "$RELEASE_REPO" --clobber
+      - name: Record native Windows validation and publish
+        shell: bash
+        run: |
+          gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json body --jq '.body' > release-notes.md
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('release-notes.md')
+          p.write_text(p.read_text().replace(
+              'Windows exe 已完成交叉构建，尚未进行 Windows 实机验证。',
+              'Windows x64 和 Linux x64 独立程序均在 GitHub Actions 原生运行环境通过启动、资源、聊天、上传下载和重启持久化检查。'
+          ))
+          PY
+          gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --notes-file release-notes.md --draft=false --latest
