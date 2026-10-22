@@ -171,6 +171,8 @@ BetterLanTalk/
 
 ## 🔧 API接口（管理接口需 `Authorization: Bearer <token>`）
 
+完整的请求参数、返回结构、权限、错误码、Socket.IO 事件与调用示例见 **[API 文档](docs/API.md)**（适用于 v1.2.0）。
+
 ### 账号
 ```
 POST /api/register     # 注册（同 IP 限一个账号）
