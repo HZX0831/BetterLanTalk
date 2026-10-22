@@ -20,7 +20,7 @@ test('social migration, friendships, private conversations and resource authoriz
   const rejected = async (socket, event, data) => { const error = receive(socket, 'error'); socket.emit(event, data); assert.match(await error, /无权|好友|未获邀请/); };
   await t.test('visitors cannot retrieve chat source; regular users cannot retrieve admin source, including encoded paths', async () => {
     const page = await api('/', null); assert.ok(!page.includes('messages-container')); assert.ok(!page.includes('adminAPI'));
-    for (const resource of ['/chat', '/client/chat.html', '/client/chat.js', '/client/styles.css', '/client/composer.js', '/client/markdown.js', '/assets/katex/katex.min.js']) {
+    for (const resource of ['/chat', '/client/chat.html', '/client/chat.js', '/client/styles.css', '/client/composer.js', '/client/markdown.js', '/client/community-ui.js', '/client/community.css', '/client/message-policy.js', '/client/emoji-data.js', '/assets/qq/14.png', '/assets/katex/katex.min.js']) {
       await api(resource, null, { status: 401 }); await api(resource, alice.token);
     }
     for (const resource of ['/admin', '/client/admin.html', '/client/admin.js', '/client/admin.css', '/client/%61dmin.js', '/client/admin%2ehtml']) {
@@ -34,8 +34,9 @@ test('social migration, friendships, private conversations and resource authoriz
     const source = await api('/client/chat.js', alice.token); assert.ok(!source.includes('resetPassword')); assert.ok(!source.includes('/api/config'));
     const header = await f.request('/client/admin.js', admin.token); assert.equal(header.headers.get('cache-control'), 'no-store');
   });
-  await t.test('legacy public access is preserved and new accounts join default only', async () => {
-    assert.ok((await api('/api/rooms', alice.token)).some(room => room.id === 'legacy'));
+  await t.test('legacy groups are archived and new accounts join default only', async () => {
+    assert.ok(!(await api('/api/rooms', alice.token)).some(room => room.id === 'legacy'));
+    assert.ok(JSON.parse(fs.readFileSync(path.join(f.dir, 'rooms.json'))).rooms.find(room => room.id === 'legacy').archived);
     assert.equal(typeof alice.id, 'string');
     assert.ok(fs.existsSync(path.join(f.dir, 'users.json.pre-social.bak')));
     assert.ok(fs.existsSync(path.join(f.dir, 'rooms.json.pre-social.bak')));
@@ -99,13 +100,13 @@ test('social migration, friendships, private conversations and resource authoriz
     assert.equal((await api('/api/rooms/' + dm.id + '/messages', bob.token)).length, 62);
   });
   await t.test('individual group removal immediately revokes files, histories, messages and notifications', async () => {
-    await api('/api/rooms', admin.token, { method: 'POST', body: { roomId: 'new-group', isPublic: true } });
-    await api('/api/rooms/new-group/join', alice.token, { method: 'POST' });
-    const groupFile = (await api('/api/upload?room=new-group', alice.token, { method: 'POST', body: 'group file', headers: { 'content-type': 'application/octet-stream', 'x-filename': 'group.txt' } })).file;
-    const joined = receive(a, 'room_joined', room => room.roomId === 'new-group'); a.emit('join_room', { roomId: 'new-group' }); await joined;
-    const kicked = receive(a, 'kicked_from_room'); await api('/api/rooms/new-group/members/' + alice.id, admin.token, { method: 'DELETE' }); await kicked;
-    await api('/api/rooms/new-group/messages', alice.token, { status: 403 }); await api(groupFile.url, alice.token, { status: 403 });
-    await rejected(a, 'send_message', { roomId: 'new-group', content: 'removed' });
+    const groupId = (await api('/api/groups', admin.token, { method: 'POST', body: { name: 'new-group', isPublic: true } })).room.id;
+    await api('/api/groups/' + groupId + '/join', alice.token, { method: 'POST' });
+    const groupFile = (await api('/api/upload?room=' + groupId, alice.token, { method: 'POST', body: 'group file', headers: { 'content-type': 'application/octet-stream', 'x-filename': 'group.txt' } })).file;
+    const joined = receive(a, 'room_joined', room => room.roomId === groupId); a.emit('join_room', { roomId: groupId }); await joined;
+    const kicked = receive(a, 'kicked_from_room'); await api('/api/groups/' + groupId + '/members/' + alice.id, admin.token, { method: 'DELETE' }); await kicked;
+    await api('/api/rooms/' + groupId + '/messages', alice.token, { status: 403 }); await api(groupFile.url, alice.token, { status: 403 });
+    await rejected(a, 'send_message', { roomId: groupId, content: 'removed' });
     await api('/api/users/charlie/role', admin.token, { method: 'PUT', body: { role: 'admin' } });
     await api('/client/admin.js', charlie.token);
     await api('/api/users/charlie/role', admin.token, { method: 'PUT', body: { role: 'user' } });
@@ -140,8 +141,8 @@ test('Jiyu automatically uses fixed account IPs and drops messages in cooldown w
   const delivered = receive(b, 'message', msg => msg.storedName === file.storedName); a.emit('send_file', { storedName: file.storedName }); await delivered; await pause(); assert.equal(packets.length, 1);
   const skipped = await f.api('/api/jiyu/test', admin.token, { method: 'POST', body: { userId: bob.id } }); assert.equal(skipped.sent, 0); assert.equal(skipped.skipped, 1); assert.match(skipped.message, /冷却/);
   c.disconnect(); await pause(); await send('closed browser on a different device'); assert.equal(packets.length, 2);
-  await f.api('/api/rooms', admin.token, { method: 'POST', body: { roomId: 'unjoined', isPublic: true } });
-  ad.emit('send_message', { roomId: 'unjoined', content: 'must not notify nonmembers' }); await pause(); assert.equal(packets.length, 2);
+  const unjoined = (await f.api('/api/groups', admin.token, { method: 'POST', body: { name: 'unjoined', isPublic: true } })).room.id;
+  ad.emit('send_message', { roomId: unjoined, content: 'must not notify nonmembers' }); await pause(); assert.equal(packets.length, 2);
   await f.api('/api/jiyu/test', admin.token, { method: 'POST', body: { ip: '192.168.1.2' }, status: 400 });
   const result = await f.api('/api/jiyu/test', admin.token, { method: 'POST', body: { userId: alice.id } }); assert.equal(result.sent, 1); assert.match(result.message, /需在目标设备确认/); await pause();
   assert.equal(packets.at(-1).subarray(56).toString('utf16le').replace(/\0.*$/s, ''), 'from admin: new message');

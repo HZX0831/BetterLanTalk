@@ -13,7 +13,7 @@ function receive(socket, name, matches = () => true) {
 }
 async function fixture(seed = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lantalk-social-')), dir = path.join(root, 'server'); fs.mkdirSync(dir);
-  for (const file of fs.readdirSync(path.join(repo, 'server')).filter(file => file.endsWith('.js'))) fs.copyFileSync(path.join(repo, 'server', file), path.join(dir, file));
+  for (const file of fs.readdirSync(path.join(repo, 'server')).filter(file => file.endsWith('.js') || file === 'package.json')) fs.copyFileSync(path.join(repo, 'server', file), path.join(dir, file));
   fs.symlinkSync(path.join(repo, 'server/node_modules'), path.join(dir, 'node_modules'), 'dir');
   fs.symlinkSync(path.join(repo, 'client'), path.join(root, 'client'), 'dir');
   for (const [file, data] of Object.entries(seed)) fs.writeFileSync(path.join(dir, file), JSON.stringify(data));

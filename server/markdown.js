@@ -6,4 +6,4 @@ for (const language of ['c', 'cpp', 'python', 'bash', 'json', 'java', 'rust', 'g
     require('prismjs/components/prism-' + language);
 }
 const { LuoguParser } = require('../client/vendor/luogu-markdown-editor/luogu-parser');
-module.exports = require('../client/markdown')({ LuoguParser, katex, Prism, DOMPurify });
+module.exports = require('../client/markdown')({ LuoguParser, katex, Prism, DOMPurify, isPlainMention: require('../client/message-policy').plainMentionAt, emojiIds: new Set(require('../client/vendor/qq/manifest.json').map(item => item.id)) });

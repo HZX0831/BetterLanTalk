@@ -44,7 +44,7 @@ jobs:
           REQUESTED_TAG: ${{ inputs.tag }}
         run: |
           tag="${REQUESTED_TAG:-v$(node -p "require('./server/package.json').version")}"
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]
           git rev-parse --verify "refs/tags/$tag"
           git checkout --detach "refs/tags/$tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
@@ -110,4 +110,8 @@ jobs:
               'Windows x64 和 Linux x64 独立程序均在 GitHub Actions 原生运行环境通过启动、资源、聊天、上传下载和重启持久化检查。'
           ))
           PY
-          gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --notes-file release-notes.md --draft=false --latest
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --notes-file release-notes.md --draft=false --prerelease --latest=false
+          else
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --notes-file release-notes.md --draft=false --prerelease=false --latest
+          fi

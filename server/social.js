@@ -1,9 +1,8 @@
 // Social data uses immutable account IDs; usernames remain display labels.
 module.exports = function attachSocial({ app, authMiddleware, adminMiddleware, userStore, social, saveSocial,
     rooms, messages, saveRooms, saveMessages, accountById, areFriends, canAccessRoom, canManageRoom,
-    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, notifyJiyu }) {
-    const publicUser = account => ({ id: account.id, username: account.username,
-        online: [...users.values()].some(user => user.id === account.id) });
+    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, notifyJiyu, community }) {
+    const publicUser = account => community.profile(account);
     function socialInfo(account) {
         return {
             friends: social.friends.filter(pair => pair.includes(account.id)).map(pair => accountById(pair.find(id => id !== account.id)))
@@ -44,7 +43,7 @@ module.exports = function attachSocial({ app, authMiddleware, adminMiddleware, u
             [request.from, request.to].includes(req.auth.id) && [request.from, request.to].includes(target.id)))
             return res.status(409).json({ error: '已有待处理申请，请前往好友申请查看' });
         const request = { id: require('crypto').randomUUID(), from: req.auth.id, to: target.id, status: 'pending', createdAt: Date.now() };
-        social.requests.push(request); saveSocial(); socialChanged(); res.json({ success: true, request });
+        social.requests.push(request); saveSocial(); community.botUpdate(target, 'friend_request', request); socialChanged(); res.json({ success: true, request });
     });
     app.put('/api/friend-requests/:id', authMiddleware, (req, res) => {
         const request = social.requests.find(request => request.id === req.params.id);
@@ -61,6 +60,7 @@ module.exports = function attachSocial({ app, authMiddleware, adminMiddleware, u
             room = directRoom(request.from, request.to);
         }
         request.status = action; request.updatedAt = Date.now(); saveSocial();
+        const requester = accountById(request.from); if (requester) community.botUpdate(requester, 'friend_result', { requestId: request.id, status: action, userId: request.to });
         syncRoomSubscriptions(); socialChanged();
         res.json({ success: true, ...(room ? { room: roomInfo(room, req.auth) } : {}) });
     });
@@ -72,44 +72,22 @@ module.exports = function attachSocial({ app, authMiddleware, adminMiddleware, u
     app.post('/api/direct-chats', authMiddleware, (req, res) => {
         if (!areFriends(req.auth.id, req.body.userId)) return res.status(403).json({ error: '仅好友之间可建立私聊' });
         const room = directRoom(req.auth.id, req.body.userId);
-        syncRoomSubscriptions(); res.json({ room: roomInfo(room, req.auth) });
+        community.notifyState(); res.json({ room: roomInfo(room, req.auth) });
     });
     app.get('/api/public-rooms', authMiddleware, (req, res) => {
         const q = String(req.query.q || '').toLowerCase();
-        res.json([...rooms.values()].filter(room => room.kind !== 'direct' && room.isPublic && room.name.toLowerCase().includes(q))
+        res.json([...rooms.values()].filter(room => room.kind !== 'direct' && !room.archived && room.isPublic && room.name.toLowerCase().includes(q))
             .map(room => ({ id: room.id, name: room.name, joined: canAccessRoom(req.auth, room), memberCount: room.memberIds.length })));
-    });
-    app.post('/api/rooms/:roomId/join', authMiddleware, (req, res) => {
-        const room = rooms.get(req.params.roomId);
-        if (!room || room.kind === 'direct' || !room.isPublic) return res.status(403).json({ error: '仅公开群可主动加入，私有群需要邀请' });
-        if (!room.memberIds.includes(req.auth.id)) room.memberIds.push(req.auth.id);
-        saveRooms(); syncRoomSubscriptions(); res.json({ room: roomInfo(room, req.auth) });
-    });
-    app.post('/api/rooms/:roomId/leave', authMiddleware, (req, res) => {
-        const room = rooms.get(req.params.roomId);
-        if (!canAccessRoom(req.auth, room) || room.kind === 'direct') return res.status(403).json({ error: '无权退出该群' });
-        if (room.id === 'default') return res.status(400).json({ error: '不能退出默认群' });
-        if (room.createdBy === req.auth.username) return res.status(400).json({ error: '群创建者请通过管理页删除群' });
-        room.memberIds = room.memberIds.filter(id => id !== req.auth.id);
-        saveRooms(); syncRoomSubscriptions(); res.json({ success: true });
-    });
-    app.delete('/api/rooms/:roomId/members/:userId', adminMiddleware, (req, res) => {
-        const room = rooms.get(req.params.roomId);
-        if (!canManageRoom(req.auth, room)) return res.status(403).json({ error: '需要群管理权限' });
-        if (room.id === 'default' || accountById(req.params.userId)?.username === room.createdBy)
-            return res.status(400).json({ error: '不能移除默认群成员或群创建者' });
-        room.memberIds = room.memberIds.filter(id => id !== req.params.userId);
-        saveRooms(); syncRoomSubscriptions(); res.json({ success: true });
     });
     app.get('/api/rooms/:roomId/members', authMiddleware, (req, res) => {
         const room = rooms.get(req.params.roomId);
         if (!canAccessRoom(req.auth, room)) return res.status(403).json({ error: '无权查看该会话' });
-        res.json(room.memberIds.map(accountById).filter(Boolean).map(publicUser));
+        res.json(community.members(room));
     });
     app.get('/api/rooms/:roomId/messages', authMiddleware, (req, res) => {
         const room = rooms.get(req.params.roomId);
         if (!canAccessRoom(req.auth, room)) return res.status(403).json({ error: '无权查看该会话' });
-        const history = messages.get(room.id) || [];
+        const history = community.history(req.auth, room);
         const index = req.query.beforeId ? history.findIndex(message => message.id === req.query.beforeId) : history.length;
         if (index < 0) return res.status(400).json({ error: '历史游标无效' });
         res.json(history.slice(0, index).slice(-100));

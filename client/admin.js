@@ -27,6 +27,7 @@
                 this.loadOnline();
                 this.loadMuted();
                 this.loadDevices();
+                this.loadBots();
             },
             async loadStatus() {
                 try {
@@ -108,59 +109,14 @@
             },
             async loadRooms() {
                 try {
-                    const rooms = await this.request('/api/rooms?manage=1');
-                    const el = document.getElementById('admin-rooms-list');
-                    el.replaceChildren();
-                    for (const room of rooms) {
-                        const members = `成员：${room.members.join('、') || '无'}`;
-                        const { row, actions } = this.row(room.name, `ID: ${room.id} | ${room.isPublic ? '公开' : '私有'} | ${room.userCount}人在线 | ${members}`);
-                        if (room.id !== 'default') {
-                            this.button(actions, '邀请用户', () => this.inviteUser(room.id, room.name));
-                            this.button(actions, '移除受邀成员', () => this.kickRoom(room.id, room.name));
-                        }
-                        if (room.id !== 'default') this.button(actions, '删除', () => this.deleteRoom(room.id, room.name, room.userCount), 'danger');
-                        el.appendChild(row);
+                    const list = await this.request('/api/rooms?manage=1'), container = document.getElementById('admin-rooms-list'); container.replaceChildren();
+                    for (const room of list) {
+                        const { row, actions } = this.row(room.name, `${room.isPublic ? '公开' : '私有'} · ${room.memberCount} 位成员`);
+                        if (room.id !== 'default') this.button(actions, '强制解散', async () => {
+                            if (confirm('强制解散 ' + room.name + '？')) { await this.request('/api/groups/' + room.id, { method: 'DELETE' }); this.loadRooms(); }
+                        }, 'danger'); container.append(row);
                     }
-                    if (!rooms.length) el.textContent = '暂无可管理的房间';
-                } catch (e) { document.getElementById('admin-rooms-list').textContent = '❌ ' + e.message; }
-            },
-            async inviteUser(roomId, roomName) {
-                const username = prompt(`邀请已有账号加入群聊「${roomName}」，请输入用户名：`);
-                if (!username || !username.trim()) return;
-                try {
-                    await this.request(`/api/rooms/${encodeURIComponent(roomId)}/invitations`, { method: 'POST', body: JSON.stringify({ username: username.trim() }) });
-                    this.loadRooms();
-                } catch (e) { alert('❌ ' + e.message); }
-            },
-            async createRoom() {
-                const roomId = document.getElementById('admin-room-id').value.trim();
-                const roomName = document.getElementById('admin-room-name').value.trim();
-                try {
-                    const r = await this.request('/api/rooms', { method: 'POST', body: JSON.stringify({ roomId, roomName, isPublic: document.getElementById('admin-room-visibility').value === 'public' }) });
-                    alert('✅ ' + r.message);
-                    this.loadRooms();
-                } catch (e) { alert('❌ ' + e.message); }
-            },
-            async deleteRoom(roomId, roomName, userCount) {
-                let force = false;
-                if (userCount > 0) {
-                    force = confirm(`房间 "${roomName}" 中有 ${userCount} 个用户，将强制删除并踢出他们，确定？`);
-                    if (!force) return;
-                } else if (!confirm(`确定删除房间 "${roomName}" ？`)) return;
-                try {
-                    const r = await this.request(`/api/rooms/${encodeURIComponent(roomId)}${force ? '?force=true' : ''}`, { method: 'DELETE' });
-                    alert('✅ ' + r.message);
-                    this.loadRooms();
-                } catch (e) { alert('❌ ' + e.message); }
-            },
-            async kickRoom(roomId, roomName) {
-                if (!confirm(`确定移除房间 "${roomName}" 中的所有受邀成员？房间创建者会保留。`)) return;
-                try {
-                    const r = await this.request(`/api/rooms/${encodeURIComponent(roomId)}/kick-users`, { method: 'POST', body: '{}' });
-                    alert('✅ ' + r.message);
-                    this.loadRooms();
-                    this.loadOnline();
-                } catch (e) { alert('❌ ' + e.message); }
+                } catch(error) { document.getElementById('admin-rooms-list').textContent = error.message; }
             },
             async loadAccounts() {
                 try {
@@ -168,13 +124,15 @@
                     const el = document.getElementById('admin-accounts-list');
                     el.replaceChildren();
                     const me = window.chatApp;
-                    for (const account of accounts) {
+                    for (const account of accounts.filter(account => account.kind !== 'bot')) {
                         const roleName = { superadmin: '超级管理员', admin: '管理员', user: '普通用户' }[account.role];
                         const { row, actions } = this.row(account.username, `${roleName} | 关联IP: ${account.boundIp || '尚未首次登录'}`);
                         const editable = me.userRole === 'superadmin' || account.role === 'user' || account.username === me.currentUser;
                         if (editable) {
                             this.button(actions, '改名', () => this.renameUser(account.username));
                             this.button(actions, '重置密码', () => this.resetPassword(account.username));
+                            this.button(actions, '解绑 IP', () => this.bindIP(account, null));
+                            this.button(actions, '换绑 IP', () => { const ip = prompt('新 IP（该账号所有会话将失效）', account.boundIp || ''); if (ip) this.bindIP(account, ip); });
                         }
                         if (me.userRole === 'superadmin' && account.role !== 'superadmin') {
                             this.button(actions, account.role === 'admin' ? '取消管理员' : '设为管理员', () => this.setRole(account.username, account.role === 'admin' ? 'user' : 'admin'));
@@ -309,6 +267,34 @@
             }
         };
 
+
+Object.assign(adminAPI, {
+    async bindIP(account, ip) {
+        if (!confirm(ip ? '换绑后该账号需要从新 IP 重新登录。' : '解绑后该账号下次登录将绑定当时的来源 IP。继续？')) return;
+        try { await this.request('/api/accounts/' + account.id + '/ip-binding', { method: 'PUT', body: JSON.stringify({ ip }) }); this.loadAccounts(); this.loadDevices(); }
+        catch(error) { alert(error.message); }
+    },
+    showBotToken(token) { const output = document.getElementById('bot-token'); output.hidden = false; output.textContent = token; },
+    async createBot() {
+        const username = prompt('Bot 名称（2–20 字符）'); if (!username) return;
+        try { const data = await this.request('/api/bots', { method: 'POST', body: JSON.stringify({ username }) }); this.showBotToken(data.token); this.loadBots(); }
+        catch(error) { alert(error.message); }
+    },
+    async loadBots() {
+        try {
+            const list = await this.request('/api/bots'), container = document.getElementById('admin-bots-list'); container.replaceChildren();
+            for (const bot of list) {
+                const { row, actions } = this.row(bot.username, bot.disabled ? '已停用' : '启用中');
+                this.button(actions, '资料', async () => { const username = prompt('Bot 名称', bot.username); if (!username) return; const about = prompt('简介', bot.about || ''); if (about === null) return; await this.request('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ username, about }) }); this.loadBots(); });
+                this.button(actions, bot.disabled ? '启用' : '停用', async () => { await this.request('/api/bots/' + bot.id, { method: 'PUT', body: JSON.stringify({ disabled: !bot.disabled }) }); this.loadBots(); });
+                this.button(actions, '重置令牌', async () => { if (confirm('旧令牌会立即失效。继续？')) this.showBotToken((await this.request('/api/bots/' + bot.id + '/token', { method: 'POST' })).token); });
+                const avatar = document.createElement('input'); avatar.type = 'file'; avatar.accept = 'image/png,image/jpeg'; avatar.setAttribute('aria-label', bot.username + ' 头像');
+                avatar.onchange = async () => { const file = avatar.files[0]; if (!file) return; try { const response = await fetch('/api/bots/' + bot.id + '/avatar', { method: 'PUT', headers: { 'Content-Type': 'application/octet-stream', ...(this.token() ? { Authorization: 'Bearer ' + this.token() } : {}) }, body: file }); const data = await response.json(); if (!response.ok) throw new Error(data.error); this.loadBots(); } catch(error) { alert(error.message); } }; actions.append(avatar);
+                this.button(actions, '删除', async () => { if (confirm('删除此 Bot？')) { await this.request('/api/bots/' + bot.id, { method: 'DELETE' }); this.loadBots(); document.getElementById('bot-token').hidden = true; } }, 'danger'); container.append(row);
+            }
+        } catch(error) { document.getElementById('admin-bots-list').textContent = error.message; }
+    }
+});
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {

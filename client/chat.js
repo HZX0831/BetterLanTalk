@@ -24,7 +24,9 @@
                     currentUser: () => this.currentUser,
                     currentRoom: () => this.currentRoom,
                     roomName: id => this.roomData.find(room => room.id === id)?.name || id,
-                    isViewingChat: () => true,
+                    isViewingChat: () => this.activeView !== 'contacts',
+                    currentUserId: () => this.currentUserId,
+                    roomSettings: id => this.roomData.find(room => room.id === id)?.settings || {},
                     openRoom: id => {
                         this.joinRoom(id);
                     },
@@ -40,6 +42,7 @@
                 this.initializeEventListeners();
                 this.initializeSocialEvents();
                 this.initializePanelEvents();
+                this.initializeCommunity?.();
                 console.log('聊天室应用初始化完成');
         }
 
@@ -82,6 +85,9 @@
                 });
                 dropZone.addEventListener('dragleave', () => { dropZone.style.outline = ''; });
                 dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.style.outline = ''; this.handleDrop(e); });
+                const composerDrop = document.querySelector('.composer');
+                composerDrop?.addEventListener('dragover', e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = this.internalDrag ? 'none' : 'copy'; });
+                composerDrop?.addEventListener('drop', e => { e.preventDefault(); this.handleDrop(e); });
                 document.getElementById('file-panel-toggle').addEventListener('click', () => {
                     const panel = document.getElementById('file-panel');
                     panel.classList.toggle('collapsed');
@@ -164,7 +170,7 @@
                 el.classList.remove('hidden');
                 el.innerHTML = this.pendingFiles.map(p => `
                     <div class="upload-item">
-                        <span>📄 ${this.escapeHtml(p.name)} (${this.formatSize(p.size)})</span>
+                        <span>${window.ChatIcons ? ChatIcons.svg('folder') : ''} ${this.escapeHtml(p.name)} (${this.formatSize(p.size)})</span>
                         <span class="upload-status">${p.status}</span>
                     </div>`).join('');
             }
@@ -186,6 +192,7 @@
                 }
 
                 const uploadRoom = this.currentRoom;
+                const replyToId = this.replyToId;
                 const item = { name: file.name || ('粘贴文件-' + Date.now()), size: file.size, status: '上传中...' };
                 this.pendingFiles.push(item);
                 this.renderUploadPreview();
@@ -206,23 +213,22 @@
                     );
                     const data = await resp.json().catch(() => ({}));
                     if (!resp.ok) {
-                        item.status = '❌ ' + (data.error || '上传失败');
+                        item.status = '' + (data.error || '上传失败');
                     } else {
-                        item.status = '✅ 已发送';
+                        item.status = '已发送';
                         this.socket.emit('send_file', {
                             storedName: data.file.storedName,
-                            roomId: uploadRoom
+                            roomId: uploadRoom, replyToId: replyToId || undefined
                         });
+                        if (this.replyToId === replyToId && this.currentRoom === uploadRoom) this.clearReply?.();
                     }
                 } catch (err) {
-                    item.status = '❌ 上传失败: ' + err.message;
+                    item.status = '上传失败: ' + err.message;
                 }
                 this.renderUploadPreview();
                 // 3秒后移除已完成项
-                const idx = this.pendingFiles.indexOf(item);
                 setTimeout(() => {
-                    if (idx > -1) this.pendingFiles.splice(idx, 1);
-                    else this.pendingFiles = this.pendingFiles.filter(p => p !== item);
+                    this.pendingFiles = this.pendingFiles.filter(p => p !== item);
                     this.renderUploadPreview();
                 }, 3000);
             }
@@ -391,6 +397,7 @@
                 this.socket.on('room_joined', (data) => {
                     const { roomId, roomName, userCount } = data;
                     this.currentRoom = roomId;
+                    this.clearReply?.();
                     this.closePanels();
                     this.currentCanSend = data.canSend !== false;
                     if (this.currentCanSend) this.enableChatInput(); else this.disableChatInput();
@@ -565,8 +572,10 @@
 
                 this.socket.emit('send_message', {
                     content: content,
-                    roomId: this.currentRoom
+                    roomId: this.currentRoom,
+                    replyToId: this.replyToId || undefined, mentions: this.draftMentions?.() || []
                 });
+                this.clearReply?.();
 
                 // 清空输入框
                 messageInput.value = '';
@@ -661,6 +670,7 @@
                 messageElement.dataset.timestamp = message.timestamp;
                 messageElement.dataset.messageId = message.id;
                 container.appendChild(messageElement);
+                this.enhanceMessage?.(messageElement, message);
 
                 this.scrollToBottom();
             }
@@ -718,27 +728,6 @@
         }
 
 
-        // Markdown 帮助功能
-        function showMarkdownHelp() {
-            document.getElementById('markdown-help').style.display = 'block';
-            document.getElementById('overlay').style.display = 'block';
-        }
-
-        function hideMarkdownHelp() {
-            document.getElementById('markdown-help').style.display = 'none';
-            document.getElementById('overlay').style.display = 'none';
-        }
-
-        // 点击遮罩层关闭帮助
-        document.getElementById('overlay').addEventListener('click', hideMarkdownHelp);
-
-        // ESC键关闭帮助
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                hideMarkdownHelp();
-            }
-        });
-
 Object.assign(ChatApp.prototype, {
     initializePanelEvents() {
         const sidebar = document.getElementById('conversation-sidebar'), details = document.getElementById('chat-details');
@@ -785,7 +774,7 @@ Object.assign(ChatApp.prototype, {
         finally { localStorage.removeItem('lantalk_auth'); sessionStorage.removeItem('lantalk_auth'); this.socket?.disconnect(); location.replace('/'); }
     },
     sendClientState() {
-        if (this.socket && this.isConnected) this.socket.emit('client_state', { isViewing: !document.hidden && document.hasFocus() });
+        if (this.socket && this.isConnected) this.socket.emit('client_state', { isViewing: this.activeView !== 'contacts' && !document.hidden && document.hasFocus() });
     },
     async loadSocial() {
         try { this.social = await this.request('/api/social'); this.renderSocial(); }

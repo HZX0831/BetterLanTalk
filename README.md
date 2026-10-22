@@ -1,31 +1,24 @@
-# 💬 BetterLanTalk 内网聊天室系统 v1.2.0
+# 💬 BetterLanTalk 内网聊天室系统 v1.3.0-beta.1
 
 一个简单易用的内网聊天室系统，支持实时消息、好友私聊、群聊、用户账号体系、文件传输和管理员控制台。
 
 > 本项目基于 [ChasonWang2012/LanTalk](https://github.com/ChasonWang2012/LanTalk)（MIT License）二次开发，在原项目基础上进行了功能增强与界面改造。原项目版权归原作者所有，详见 [LICENSE](LICENSE) 与下方「致谢」。
 
-## ✨ 功能特性
+## ✨ 当前分支更新
 
-### 原项目已有
-- 💬 **实时聊天** - 基于 WebSocket 的即时消息
-- 🏠 **多房间支持** - 创建和加入不同聊天室
-- 📝 **支持 Markdown** - 完整的 Markdown 语法支持
-- 🔇 **IP 禁言** - 管理员禁言违规用户
-- 💻 **桌面界面** - 左侧源码、右侧实时预览，消息区直接渲染；支持桌面半屏及 9:16 窄窗口，侧栏可按需展开
+- 默认浅色、纯 SVG 图标与圆角布局；聊天和联系人独立，支持深色／跟随系统／自定义强调色，适配 9:16 半屏窗口。
+- Luogu Markdown 左右编辑预览，预览可关闭；保留高度调整、Enter 换行、Ctrl+Enter 发送、文件选择、拖放与 Ctrl+V 图片上传。
+- 本地 QQ 表情面板、搜索、最近使用及 `/jy` 等斜杠候选；消息支持引用、表情回应、复制和群精华。
+- 支持 @单人；群主和群管理员可 @全体成员。每群可选择完全免打扰／仅重要消息／全部提醒，浏览器与极域遵循同一规则。完全免打扰保留灰色未读徽标及提及标记。
+- 所有人类用户均可创建公开或私有群；独立群主／群管理员权限，支持好友邀请、问题自动校验、入群审核、公告、成员管理和群主转让。
+- 联系人页管理好友与 Bot；好友申请和群邀请在左下角。头像、群昵称、私人群备注、置顶、个人记录清空及界面偏好持久保存。
+- 管理员可解绑／换绑账号 IP，立即撤销相关会话；人类账号与 IP 保持一一对应，超级管理员首次成功登录绑定。
+- 管理员可创建无绑定 IP 的 Bot，通过专用令牌 API 拉取消息、发消息、处理申请及执行已获授权的群管理；自动向人类账号发送一次好友申请。
+- 全站管理与群管理独立；管理员不能读取未加入群组的消息。登录、聊天与管理源码按权限分开提供。
+- 极域通知默认关闭，使用账号绑定 IP，显示 `from 用户名: new message/new file/new picture`；每台设备冷却 20 秒，期间直接忽略。
+- 所有聊天资源、公式字体、代码高亮及 QQ 表情均本地提供；浏览器无需安装客户端，无需外网 CDN。
 
-### 本版本新增 / 增强
-- 👥 **账号系统** - 用户名 + 密码注册 / 登录，密码使用 Node 内置 `crypto.scrypt` 加盐哈希存储；账号与设备 IP 一对一关联，同一 IP 只能使用一个账号，账号只能从其固定 IP 登录
-- 🔐 **登录持久化** - 「记住我」后刷新页面自动登录，token 有效期 7 天
-- 🛡️ **独立管理页** - 管理员通过聊天页的「管理」入口进入独立页面；页面及脚本、样式均由服务端校验权限，支持修改端口、单文件大小与存储总量上限
-- 👥 **账号管理** - 初始账号为超级管理员，可设置或取消管理员；普通管理员可管理普通用户账号，不能修改其他管理员或超级管理员
-- 🏠 **房间权限** - 仅管理员可创建房间；新账号仅加入默认群；其他公开群可查找后主动加入，私有群需管理员邀请；群定义及成员关系持久保存
-- 👤 **好友与私聊** - 左侧显示好友与已加入的群聊，底部处理申请；右侧显示当前会话成员并可搜索加好友。支持接受、拒绝、撤回、删除好友，只有好友可发送私聊消息；解除好友后历史记录仍可查看
-- 📎 **文件传输** - 图片直接显示在消息中（支持 Ctrl+V 粘贴上传），支持本地文件拖放上传，页面内拖动已有图片不会重复发送；其他文件显示在右侧「房间文件」栏。单文件额度与存储总量可在管理面板调整，超出总量自动清理最早上传的文件（界面标记「已过期」）
-- 🔔 **消息提醒** - 页面在后台或窗口失焦时，已授权的浏览器可弹出系统通知，点击后进入对应房间；其他房间的消息显示未读计数。系统通知需要 HTTPS 或 localhost 和浏览器授权，普通内网 HTTP 使用房间与标签页标题的未读提醒
-- 🔔 **极域通知** - 默认关闭，直接使用账号关联的 IP；浏览器关闭或后台时向兼容学生端发送 `from 用户名: new message/new file/new picture`，每台设备有 20 秒冷却，期间提醒直接丢弃
-- 🌐 **免下载客户端** - 浏览器直接访问 `http://<服务器IP>:端口/` 即可使用，Socket.IO 客户端由服务器本地提供，无需外网 CDN
-- 💻 **一键启动脚本** - `start.bat`（Windows）/ `start.sh`（Linux / macOS）
-- ✨ **体验优化** - 用户进出改为右上角限时提示（不再刷屏）；页面刷新不再误报「离开 / 进入」；文件侧栏折叠；管理员广播等系统消息使用统一大消息框
+接口与示例：[API 文档](docs/API.md)、[Bot 示例](examples/bot.mjs)。本次版本为 `v1.3.0-beta.1` 预发布版，正式版 latest 保持不变。
 
 ## 🛠️ 技术栈
 
@@ -35,7 +28,7 @@
 
 ### Luogu Markdown
 
-聊天与实时预览使用 [wudream813/luogu-markdown-editor](https://github.com/wudream813/luogu-markdown-editor) v1.40.3 的原版解析器，两端共用解析及 HTML 清理逻辑。聊天输入区提供粗体、斜体、公式、代码、表格和折叠框插入按钮，以及左侧源码、右侧实时预览的桌面双栏编辑区；消息区直接显示渲染结果。工具栏复用上游图标，保留常用 Markdown 插入与撤销/重做，不提供排版修复、模板、导出或工作区功能。
+聊天与实时预览使用 [wudream813/luogu-markdown-editor](https://github.com/wudream813/luogu-markdown-editor) v1.40.3 的原版解析器，两端共用解析及 HTML 清理逻辑。聊天输入区默认左侧编辑、右侧实时预览，预览可以关闭；消息区直接显示渲染结果。工具栏仅保留表情、文件及预览图标，Markdown 直接编辑，常用格式快捷键仍可使用。
 
 - 支持 `$...$` / `$$...$$` LaTeX 公式、嵌套折叠框、对齐、引言、引用链接、脚注和任务列表。
 - 表格中 `<` 向左合并，`^` 向上合并；支持 Luogu 表格扩展。
@@ -43,7 +36,7 @@
 - 支持 `![](bilibili:BV号)`；只有点击播放器才连接 Bilibili，外部图片或视频仍需客户端能访问其来源。
 - 文件按钮、拖拽附件、Ctrl+V 图片上传保留；图片仍显示在消息中，文件仍出现在房间文件栏。
 - Enter 换行，Ctrl+Enter（macOS 也可用 Command+Enter）发送；中文输入法确认候选文字不会误发送。每条文字消息最多 20,000 字符。
-- 消息气泡按内容收紧，宽屏最大 520px；窄窗口中好友列表与成员/文件栏可展开、收起，源码和预览始终保持左右对照。
+- 消息气泡按内容收紧，宽屏最大 520px；窄窗口中好友列表与成员/文件栏可展开、收起，开启预览时保持左右对照，关闭后编辑区铺满。
 - 编辑区顶部的拖动条可上下调整源码和预览的共同高度，设置会保留；双击恢复默认高度，也可聚焦拖动条后使用上下方向键调整。
 
 上游 MIT 许可证和精确版本记录位于 `client/vendor/luogu-markdown-editor/`。解析器文件保持原样，聊天专用预览与交互在独立模块中实现。
@@ -81,7 +74,7 @@ admin / =Aa1357924680
 
 Windows 10/11 x64 可使用 `BetterLanTalk-win-x64.exe`，无需安装 Node.js。将程序放在有写入权限的文件夹，双击启动，程序会打开浏览器并在控制台显示内网访问地址。关闭控制台或按 Ctrl+C 停止服务；其他电脑仍通过浏览器访问服务器地址。
 
-程序已包含聊天页面、Markdown 编辑器、公式字体、代码高亮及 Socket.IO。账号、配置、消息和上传文件保存在 exe 旁自动生成的 `data/` 目录。升级时关闭旧程序、替换 exe 并保留 `data/`；从源码版迁移时，将 `server/` 下的运行时 JSON、相关备份及 `uploads/` 复制到 `data/`。不要复制 `node_modules/`。需要指定其他存储位置时可设置 `LANTALK_DATA_DIR`；设置 `LANTALK_OPEN_BROWSER=0` 可禁用自动打开浏览器。
+程序已包含聊天页面、Markdown 编辑器、公式字体、代码高亮及 Socket.IO。账号、配置、消息和上传文件保存在 exe 旁自动生成的 `data/` 目录。升级时关闭旧程序、替换 exe 并保留 `data/`；从源码版迁移时，将 `server/` 下的运行时 JSON、相关备份、`community.json`、`avatars/` 及 `uploads/` 复制到 `data/`。不要复制 `node_modules/`。需要指定其他存储位置时可设置 `LANTALK_DATA_DIR`；设置 `LANTALK_OPEN_BROWSER=0` 可禁用自动打开浏览器。
 
 开发者重新构建需要 Node.js 22 或更新版本，在 `server/` 中执行：
 
@@ -107,33 +100,24 @@ npm run bundle
 
 在 `server/` 中执行 `npm test`。测试覆盖 Luogu 公式、折叠框、表格合并、代码高亮、脚注隔离及安全清理，并在临时数据目录中验证账号权限、双客户端聊天、文件上传下载和房间管理，不修改现有账号或上传文件。新增测试覆盖好友审批、私聊成员隔离、重启持久化、旧数据迁移、前端资源的游客/普通用户/管理员访问限制，以及固定文案的本地回环 UDP 发送和失败处理。
 
-`npm run test:browser` 提供真实 Chromium 检查（需另行安装 Playwright 并执行 `npx playwright install chromium`）。也可设置 `PLAYWRIGHT_MODULE_PATH` 和 `CHROMIUM_EXECUTABLE_PATH` 使用已安装环境。浏览器测试使用临时账号和数据，截图输出至系统临时目录下的 `betterlantalk-browser-artifacts`，可通过 `BROWSER_ARTIFACT_DIR` 指定目录。
+`npm run test:browser` 提供真实 Chromium 检查（需另行安装 Playwright 并执行 `npx playwright install chromium`）。也可设置 `PLAYWRIGHT_MODULE_PATH` 和 `CHROMIUM_EXECUTABLE_PATH` 使用已安装环境。浏览器测试使用临时账号和数据，截图默认输出至仓库旁的 `BetterLanTalk-verification/`，可通过 `BROWSER_ARTIFACT_DIR` 指定目录。
 
 ### 管理功能
 
-管理员登录后点击聊天页右上角「管理」：
+管理员通过左下角工具箱进入「管理」，可调整服务器配置、账号、IP 绑定、Bot、全站角色、禁言、广播和极域通知；群治理列表只提供概况和强制解散。
 
-- 📊 服务器状态
-- ⚙️ 修改端口、对外 IP、单文件上限、上传目录总上限（保存到 `server/config.json`，端口重启生效，其余立即生效）
-- 🏠 创建公开或私有房间；管理自己创建的房间，超级管理员可管理所有房间
-- ✉️ 群聊中点击「邀请用户」，输入已注册用户名；该用户立即加入群聊，在线用户会收到通知，离线用户下次登录即可看到群聊
-- 👥 账号管理：修改用户名、重置密码、删除普通用户；超级管理员可点击「设为管理员」或「取消管理员」，权限立即生效
-- 🟢 在线用户、🔇 IP 禁言
-- 📢 全服广播（发送至群聊，不插入双人私聊）
-- 🔔 极域通知开关、UDP 端口、查看账号关联 IP 与测试弹窗
+普通群由独立群主和群管理员负责，入口在会话右上角。群主可编辑入群规则、任命管理员、转让及解散；群管理员可编辑公告、审核、管理普通成员及精华。所有成员可邀请自己的好友，邀请仍须通过问题或审核。
 
-默认群自动加入所有账号且不可退出。新建的其他公开群只包含创建者，用户查找后主动加入；私有群由管理员邀请。群成员列表、历史消息、上传和下载都校验成员资格；超级管理员可管理群定义，但阅读内容仍需成员资格。移除成员会立即撤销访问并将正在查看该群的用户切回默认群。好友关系使用稳定账号 ID，改名不改变好友或私聊归属。
-
-群聊和双人私聊历史保存在 `server/messages.json`，好友申请与关系保存在 `server/social.json`，重启后保留。升级时自动把已有公开群对旧用户的访问转换为明确成员，新注册用户仍只加入默认群；迁移前的账号与群数据会保存为 `*.pre-social.bak`，数据无法解析时停止启动，避免覆盖原文件。原版本仅在内存中的聊天记录无法在升级时恢复。
+默认聊天室自动加入所有账号且不可退出。移除成员会立即撤销消息与附件访问；账号改名不改变好友、群成员或私聊归属。群和私聊历史、好友关系、审核与个人设置均持久保存。
 
 ### 极域通知配置
 
 1. 兼容的极域学生端须在目标电脑运行，服务器能够访问该电脑的 UDP 端口（默认 4988，可在管理页设置；升级时保留已保存的端口配置）。
 2. 账号 IP 自动关联，无需极域设备绑定。新注册账号使用注册请求的实际 IP；旧普通账号沿用原注册 IP，原来没有 IP 的账号在首次成功登录时关联。初始超级管理员、迁移时自动升级为超级管理员的旧账号均在首次成功登录时绑定 IP，不沿用注册 IP；密码错误不会绑定，已完成绑定的超级管理员在升级、重启后保留原 IP。关联持久保存在 `users.json` 的 `boundIp`，升级前原文件备份为 `users.json.pre-ip.bak`。
-3. 每个 IP 只能关联一个账号；账号不能从其他 IP 登录。登录、已有 token / Cookie、页面资源、文件和 Socket 会话均校验 IP；改名、改密码和重启不会改变关联。删除账号后该 IP 可供新账号使用。
+3. 每个 IP 只能关联一个账号；账号不能从其他 IP 登录。登录、已有 token / Cookie、页面资源、文件和 Socket 会话均校验 IP；改名、改密码和重启不会改变关联。管理员可解绑或换绑，立即撤销该账号会话；删除账号也会释放 IP。
 4. IP 取服务器 TCP 连接的实际对端地址，不相信客户端的 `X-Forwarded-For` 或 `CF-Connecting-IP`。此模式应直接通过内网访问；如果多个设备经 NAT、Cloudflare Tunnel 或反向代理共用一个服务器可见的 IP，它们会被视为同一设备。改变设备地址后原账号仍受固定 IP 限制。
 5. 开启「极域通知」后，在管理页对应账号点击「测试通知」。手动绑定入口已移除，旧手动设备名单不再作为通知目的地。发送完成仅表示 UDP 数据已交给网络，不能证明学生端收到或显示。
-6. 当前会话在前台阅读时不发送极域提醒；其他会话、页面后台或浏览器关闭时使用账号关联 IP。非群成员和非私聊参与者不会收到该会话的提醒。
+6. 群通知档位同时控制浏览器与极域，完全免打扰连 @ 也不提醒。当前会话在前台阅读时不发送极域提醒；其他会话、页面后台或浏览器关闭时使用账号关联 IP。非群成员和非私聊参与者不会收到该会话的提醒。
 7. 每个目标 IP 共用 20 秒冷却，覆盖不同群聊、发送者、文件、图片、广播及测试通知；第一次发送即开始计时，期间的提醒直接忽略，不排队、不延长冷却、不影响聊天室内的消息送达。发送失败也占用冷却，避免连续重试。
 
 文字和广播显示 `from 用户名: new message`，文件显示 `from 用户名: new file`，图片显示 `from 用户名: new picture`；不包含群名、正文或文件名。此方式无需 HTTPS 或外网推送服务，但依赖目标学生端版本与内网连通性。本地验证只向回环 UDP 接收器发送，不等同于真实学生端兼容性测试。弹窗协议结构参考用户提供的 [Jiyu_udp_attack](https://github.com/ht0Ruial/Jiyu_udp_attack)，本项目只实现通知弹窗。
@@ -156,7 +140,10 @@ BetterLanTalk/
 │   ├── server.js       # 后端入口
 │   ├── users.json      # 账号与登录令牌（自动生成）
 │   ├── rooms.json      # 群聊、私聊与成员（自动生成）
-│   ├── social.json     # 好友、申请及通知设备（自动生成）
+│   ├── social.json     # 好友与好友申请（自动生成）
+│   ├── community.js    # 群权限、消息、Bot 与个人设置
+│   ├── community.json  # 设置、审核、邀请、审计与 Bot 更新（自动生成）
+│   ├── avatars/        # 持久头像（自动生成）
 │   ├── messages.json   # 聊天历史（自动生成）
 │   ├── social.js       # 好友及会话 API
 │   ├── jiyu.js         # 极域通知弹窗协议
@@ -169,62 +156,9 @@ BetterLanTalk/
 └── README.md
 ```
 
-## 🔧 API接口（管理接口需 `Authorization: Bearer <token>`）
+## API 与 Bot
 
-完整的请求参数、返回结构、权限、错误码、Socket.IO 事件与调用示例见 **[API 文档](docs/API.md)**（适用于 v1.2.0）。
-
-### 账号
-```
-POST /api/register     # 注册（同 IP 限一个账号）
-POST /api/login        # 登录，返回 token
-GET  /api/me           # 校验会话，返回稳定账号 ID 与当前用户
-POST /api/logout       # 注销
-GET  /api/accounts     # [管理] 账号列表
-PUT  /api/users/:name  # [管理] 改名 / 重置密码
-DELETE /api/users/:name# [管理] 删除账号
-PUT /api/users/:name/role # [超级管理员] 设置 role: "admin" 或 "user"
-GET  /api/config       # [管理] 查看端口与文件限制
-PUT  /api/config       # [管理] 修改端口 / 单文件上限 / 总量上限
-```
-
-### 其他
-```
-GET  /api/health       POST /api/mute-ip    POST /api/unmute-ip
-GET  /api/users        GET /api/rooms       POST /api/broadcast
-POST /api/rooms        DELETE /api/rooms/:id  POST /api/rooms/:id/kick-users
-GET /api/rooms?manage=1 # [管理] 可管理房间列表
-POST /api/rooms/:id/invitations # [房间管理] 邀请，body: { "username": "已有账号" }
-```
-
-`GET /api/rooms` 需登录，只返回该账号可访问的房间；创建房间需管理员权限，body 包含 `roomId`、`roomName` 和 `isPublic`（布尔值，默认 `true`）。邀请、删除和移除成员仅允许仍具管理员身份的创建者或超级管理员操作。默认群不能移除成员；其他群可移除成员；删除在线房间需 `?force=true`，默认公共聊天室不能删除。
-
-### 文件
-```
-GET  /api/limits       # 单文件/总量上限（公开，上传预校验）
-POST /api/upload       # 上传文件（需登录；查询参数 room=房间ID）
-GET  /api/files?room=  # 房间文件列表（需登录且有房间访问权限）
-GET  /uploads/<存储名>  # 文件下载/预览（同上；浏览器使用 HttpOnly 会话 cookie，API 可使用 Bearer token）
-```
-
-### 好友、会话与极域（均需登录，极域设备管理需管理员）
-```
-GET  /api/people?q=用户名
-GET  /api/social
-POST /api/friend-requests             # body: { userId }
-PUT  /api/friend-requests/:id          # action: accept/reject/withdraw
-DELETE /api/friends/:userId
-POST /api/direct-chats                # body: { userId }
-GET  /api/public-rooms
-POST /api/rooms/:roomId/join
-POST /api/rooms/:roomId/leave
-GET  /api/rooms/:roomId/members
-DELETE /api/rooms/:roomId/members/:userId # [群管理员]
-GET  /api/rooms/:roomId/messages?beforeId=消息ID
-GET  /api/my-notification-devices
-GET  /api/jiyu/devices                 # [管理] 只读账号关联 IP
-POST /api/jiyu/test                    # [管理] body: { userId }，使用账号固定 IP
-```
-IP 校验同时适用于 Bearer token 和 HttpOnly Cookie，不能通过跨 IP 携带有效 token 绕过。配置 API 增加 `jiyuEnabled`（布尔值）及 `jiyuPort`（1–65535 的整数）。登录支持 HttpOnly 会话 Cookie，API 同时兼容 Bearer token。
+完整参数、权限、错误码、Socket.IO 事件和旧接口停用说明见 **[API 文档](docs/API.md)**。新群组使用 `/api/groups`；会话记录继续使用 `/api/rooms/:roomId/messages`。Bot 使用 `/api/bot/v1` 和独立令牌，调用示例见 [examples/bot.mjs](examples/bot.mjs)。
 
 ## ⚠️ 注意事项
 
@@ -243,3 +177,13 @@ IP 校验同时适用于 Bearer token 和 HttpOnly Cookie，不能通过跨 IP �
 ## 🙏 致谢
 
 - 感谢 [ChasonWang2012](https://github.com/ChasonWang2012) 开源的 [LanTalk](https://github.com/ChasonWang2012/LanTalk) 项目，为本项目提供了基础。
+
+## 升级与数据
+
+首次运行新群组版本时，旧自建群保留归档数据并从会话／公开搜索列表移除，默认聊天室、账号、好友及私聊继续保留；不把旧群自动迁入新群系统。升级前可完整备份原数据目录，回退旧程序时恢复这份备份。
+
+新增 `community.json` 保存群个人设置、邀请、审核、IP 审计和 Bot 更新队列；`avatars/` 保存头像。这些与账号、群定义、消息及附件一起备份。独立程序使用 exe 旁的 `data/`，或 `LANTALK_DATA_DIR` 指定目录。
+
+QQ 表情资源固定自 [koishijs/QFace](https://github.com/koishijs/QFace)，来源和版权说明在 `client/vendor/qq/NOTICE.md`。上游代码的 MIT 许可不等同于腾讯表情素材许可，保留上游素材使用说明。
+
+本地验证：`npm --prefix server test`；安装 Playwright 并配置 Chromium 后运行 `npm --prefix server run test:browser`。Linux 构建运行 `npm --prefix server run bundle:linux`，再运行 `npm --prefix server run test:bundle`；Windows 构建运行 `bundle`，原生验证仍需 Windows 环境。

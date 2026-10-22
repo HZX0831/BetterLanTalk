@@ -72,7 +72,7 @@
             const observer = new ResizeObserver(() => fitHeight());
             [column, toolbar, composer.querySelector('.composer-footer'), document.getElementById('upload-preview')].forEach(el => observer.observe(el));
         } else window.addEventListener('resize', () => fitHeight());
-        const render = createChatMarkdown({ LuoguParser, katex, Prism, DOMPurify });
+        const render = createChatMarkdown({ LuoguParser, katex, Prism, DOMPurify, isPlainMention: MessagePolicy.plainMentionAt, emojiIds: new Set((window.ChatEmoji || []).map(item => item.id)) });
         let timer;
         let syncingScroll = false;
         let replayingHistory = false;
@@ -88,7 +88,7 @@
             gutter.scrollTop = input.scrollTop;
         };
         const refresh = () => {
-            preview.innerHTML = input.value.trim() ? render(input.value) : '<p class="preview-empty">输入内容后，在这里预览。</p>';
+            preview.innerHTML = input.value.trim() ? render(input.value, 'preview', window.chatApp?.draftMentions?.() || []) : '<p class="preview-empty">输入内容后，在这里预览。</p>';
         };
         input.addEventListener('input', () => {
             if (!replayingHistory && history[historyIndex].value !== input.value) {

@@ -1,14 +1,16 @@
 (function (root, factory) {
-    if (typeof module === 'object' && module.exports) module.exports = factory;
-    else root.ChatNotifications = factory(root);
-})(typeof globalThis === 'object' ? globalThis : this, function (window) {
+    if (typeof module === 'object' && module.exports) module.exports = window => factory(window, require('./message-policy'));
+    else root.ChatNotifications = factory(root, root.MessagePolicy);
+})(typeof globalThis === 'object' ? globalThis : this, function (window, policy) {
     'use strict';
     const document = window.document;
     return class ChatNotifications {
-        constructor({ currentUser, currentRoom, roomName, isViewingChat, openRoom, onUnread, onHint }) {
-            Object.assign(this, { currentUser, currentRoom, roomName, isViewingChat, openRoom, onUnread, onHint });
+        constructor({ currentUser, currentRoom, roomName, isViewingChat, openRoom, onUnread, onHint, currentUserId = currentUser, roomSettings = () => ({}) }) {
+            Object.assign(this, { currentUser, currentRoom, roomName, isViewingChat, openRoom, onUnread, onHint, currentUserId, roomSettings });
             this.enabled = this.readPreference();
             this.unread = new Map();
+            this.mentions = new Map();
+            this.importantUnread = new Set();
             this.seen = new Set();
             this.active = new Map();
             this.baseTitle = document.title;
@@ -68,14 +70,14 @@
             if (!button) return;
             button.classList.toggle('enabled', this.enabled);
             button.setAttribute('aria-pressed', String(this.enabled));
-            button.textContent = this.enabled ? (this.nativeReady() ? '通知已开启' : '未读提醒') : '开启通知';
+            if (!button.querySelector('svg')) button.textContent = this.enabled ? (this.nativeReady() ? '通知已开启' : '未读提醒') : '开启通知';
             button.title = this.enabled ? (this.nativeReady() ? '关闭系统通知' : this.fallbackReason() + ' 点击关闭。') : '开启消息通知';
         }
         viewingRoom(room) {
             return !document.hidden && document.hasFocus() && this.isViewingChat() && room === this.currentRoom();
         }
         updateUnread() {
-            const count = Array.from(this.unread.values()).reduce((sum, value) => sum + value, 0);
+            const count = Array.from(this.unread.entries()).filter(([room]) => this.roomSettings(room).notificationMode !== 'none' && (this.roomSettings(room).notificationMode !== 'important' || this.importantUnread.has(room))).reduce((sum, [, value]) => sum + value, 0);
             document.title = this.enabled && count ? `(${count}) ${this.baseTitle}` : this.baseTitle;
             this.onUnread(this.unread);
         }
@@ -83,6 +85,7 @@
             const room = this.currentRoom();
             if (!this.viewingRoom(room)) return;
             this.unread.delete(room);
+            this.mentions.delete(room); this.importantUnread.delete(room);
             for (const [id, item] of this.active) {
                 if (item.room === room) { item.notification.close(); this.active.delete(id); }
             }
@@ -91,6 +94,8 @@
         pruneRooms(ids) {
             const allowed = new Set(ids);
             for (const room of this.unread.keys()) if (!allowed.has(room)) this.unread.delete(room);
+            for (const room of this.mentions.keys()) if (!allowed.has(room)) this.mentions.delete(room);
+            for (const room of this.importantUnread) if (!allowed.has(room)) this.importantUnread.delete(room);
             for (const [id, item] of this.active) {
                 if (!allowed.has(item.room)) { item.notification.close(); this.active.delete(id); }
             }
@@ -116,14 +121,17 @@
             const room = message.room || this.currentRoom();
             if (this.viewingRoom(room)) return;
             this.unread.set(room, (this.unread.get(room) || 0) + 1);
+            if (policy.mentioned(message, this.currentUserId())) this.mentions.set(room, { id: message.id, all: message.mentions.some(item => item.type === 'all') });
+            if (policy.eligible('important', message, this.currentUserId())) this.importantUnread.add(room);
             this.updateUnread();
+            if (!policy.eligible(this.roomSettings(room).notificationMode || 'all', message, this.currentUserId())) return;
             // Other rooms retain unread counts; desktop alerts appear only outside this window.
             if (!this.enabled || !this.nativeReady() || (!document.hidden && document.hasFocus())) return;
             this.showNative(message, room).catch(() => {});
         }
         async showNative(message, room) {
             const display = () => {
-                if (!this.enabled || !this.nativeReady() || this.viewingRoom(room) || !this.unread.has(room)) return;
+                if (!policy.eligible(this.roomSettings(room).notificationMode || 'all', message, this.currentUserId()) || !this.enabled || !this.nativeReady() || this.viewingRoom(room) || !this.unread.has(room)) return;
                 const key = 'lantalk_native_' + this.currentUser();
                 let recent = [];
                 try {

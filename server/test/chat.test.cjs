@@ -18,7 +18,7 @@ async function readiness(base) {
   const info = await status.json();
   assert.equal(info.name, '内网聊天室服务器');
   assert.equal(info.status, 'running');
-  assert.equal(info.version, '1.2.0');
+  assert.equal(info.version, require('../package.json').version);
   for (const route of ['/', '/client/index.html', '/socket.io/socket.io.js', '/client/login.js', '/client/login.css']) {
     const r = await request(base + route, { signal: AbortSignal.timeout(3000) });
     assert.equal(r.status, 200, route);
@@ -50,7 +50,7 @@ async function smoke() {
   const workdir = path.join(root, 'server');
   fs.mkdirSync(workdir);
   fs.copyFileSync(path.join(repo, 'server/server.js'), path.join(workdir, 'server.js'));
-  for (const file of ['markdown.js', 'social.js', 'jiyu.js']) fs.copyFileSync(path.join(repo, 'server', file), path.join(workdir, file));
+  for (const file of ['markdown.js', 'social.js', 'jiyu.js', 'community.js', 'package.json']) fs.copyFileSync(path.join(repo, 'server', file), path.join(workdir, file));
   fs.symlinkSync(path.join(repo, 'server/node_modules'), path.join(workdir, 'node_modules'), 'dir');
   fs.symlinkSync(path.join(repo, 'client'), path.join(root, 'client'), 'dir');
   const probe = net.createServer();
@@ -130,13 +130,13 @@ async function smoke() {
     sockets[0].emit('send_file', { storedName: uploaded.file.storedName, roomId: 'default' });
     assert.equal((await fileMessage).name, 'onboarding.txt');
     console.log('PASS: file upload, listing, exact download content and file message delivery');
-    const room = await api('/api/rooms', { method: 'POST', token: admin.token, body: { roomId: 'smoke-room', roomName: 'Smoke room' } });
-    assert.equal(room.room.id, 'smoke-room');
-    assert.ok(!(await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));
-    await api('/api/rooms/smoke-room/join', { method: 'POST', token: login.token });
-    assert.ok((await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));
-    await api('/api/rooms/smoke-room?force=true', { method: 'DELETE', token: admin.token });
-    assert.ok(!(await api('/api/rooms', { token: login.token })).some(r => r.id === 'smoke-room'));
+    const room = await api('/api/groups', { method: 'POST', token: admin.token, body: { name: 'Smoke room', isPublic: true } });
+    assert.ok(room.room.id.startsWith('group-'));
+    assert.ok(!(await api('/api/rooms', { token: login.token })).some(r => r.id === room.room.id));
+    await api('/api/groups/' + room.room.id + '/join', { method: 'POST', token: login.token });
+    assert.ok((await api('/api/rooms', { token: login.token })).some(r => r.id === room.room.id));
+    await api('/api/groups/' + room.room.id, { method: 'DELETE', token: admin.token });
+    assert.ok(!(await api('/api/rooms', { token: login.token })).some(r => r.id === room.room.id));
     await api('/api/logout', { method: 'POST', token: login.token });
     await api('/api/me', { token: login.token, status: 401 });
     console.log('PASS: room creation/deletion and logout invalidation');

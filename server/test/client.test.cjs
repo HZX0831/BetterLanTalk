@@ -215,3 +215,17 @@ test('messages in another room reach notification handling without entering the 
   listeners.get('message')(message('same-room'));
   assert.equal(displayed.length, 1);
 });
+
+test('group notification tiers suppress popups but preserve gray-unread inputs and mention state', async t => {
+  const { window, state, notifications } = browser(t);
+  let mode = 'none'; notifications.currentUserId = () => 'me-id'; notifications.roomSettings = () => ({ notificationMode: mode });
+  await notifications.toggle();
+  notifications.receive(message('muted-mention', 'default', { userId: 'other', mentions: [{ type: 'all' }], senderRole: 'admin' }));
+  assert.equal(state.notices.length, 0); assert.equal(notifications.unread.get('default'), 1); assert.ok(notifications.mentions.has('default')); assert.doesNotMatch(window.document.title, /^\(/);
+  mode = 'important';
+  notifications.receive(message('ordinary', 'other', { userId: 'other', senderRole: 'member', mentions: [{ type: 'user', userId: 'somebody-else' }] }));
+  assert.equal(state.notices.length, 0); assert.ok(!notifications.importantUnread.has('other'));
+  notifications.receive(message('owner', 'other', { userId: 'other', senderRole: 'owner' })); assert.equal(state.notices.length, 1);
+  notifications.receive(message('to-me', 'other', { userId: 'other', mentions: [{ type: 'user', userId: 'me-id' }] })); assert.equal(state.notices.length, 2);
+  mode = 'all'; notifications.receive(message('all-mode', 'other', { userId: 'other', senderRole: 'member' })); assert.equal(state.notices.length, 3);
+});

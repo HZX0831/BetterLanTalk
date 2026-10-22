@@ -47,3 +47,9 @@ server/messages.json
 server/*.json.tmp
 server/*.pre-social.bak
 server/*.pre-ip.bak
+
+# 群组设置、Bot 更新队列与持久头像
+server/community.json
+server/avatars/
+
+.lantalk-bot-cursor.json
