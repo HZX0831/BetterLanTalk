@@ -36,7 +36,7 @@ const { receive } = require('./fixture.cjs');
   async function stop() {
     socket?.disconnect(); socket = null;
     if (child?.exitCode === null && child.signalCode === null) {
-      const done = once(child, 'exit'); child.kill('SIGINT'); await done;
+      const done = once(child, 'close'); child.kill('SIGINT'); await done;
     }
   }
   async function api(route, token, { status = 200, body, headers = {}, ...options } = {}) {
@@ -109,5 +109,5 @@ const { receive } = require('./fixture.cjs');
     assert.equal(JSON.parse(fs.readFileSync(path.join(data, 'users.json'))).users[0].boundIp, '127.0.0.1');
     console.log('PASS: standalone startup without Node.js/checkout, all embedded assets, protected pages, Markdown/QQ emoji, WebSocket, upload/download, group/Bot/avatars/preferences restart persistence and custom data directory');
   } catch (error) { console.error(output); throw error; }
-  finally { await stop(); fs.rmSync(root, { recursive: true, force: true }); }
+  finally { await stop(); await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
