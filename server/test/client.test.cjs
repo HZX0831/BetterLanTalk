@@ -176,6 +176,32 @@ test('editor reserves Enter for newlines and Ctrl/Command+Enter for sending, inc
   window.clearTimeout(app.typingTimeout);
 });
 
+test('swapped sending inserts Ctrl/Command+Enter newlines and protects composition and completion', t => {
+  const { window, app, input, sent } = chatApp(t);
+  app.appearance = { sendMode: 'enter' };
+  const key = extra => {
+    const event = new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...extra });
+    input.dispatchEvent(event); return event;
+  };
+  let edits = 0; input.addEventListener('input', () => edits++);
+  input.value = 'abcd'; input.setSelectionRange(1, 3);
+  assert.equal(key({ ctrlKey: true }).defaultPrevented, true); assert.equal(input.value, 'a\nd');
+  assert.equal(key({ metaKey: true }).defaultPrevented, true); assert.equal(input.value, 'a\n\nd'); assert.equal(edits, 2);
+  assert.equal(key({ shiftKey: true }).defaultPrevented, false);
+  assert.equal(key({ altKey: true }).defaultPrevented, false);
+  assert.equal(key({ isComposing: true }).defaultPrevented, false);
+  assert.equal(key({ keyCode: 229 }).defaultPrevented, false);
+  input.dispatchEvent(new window.CompositionEvent('compositionstart'));
+  assert.equal(key({}).defaultPrevented, false);
+  input.dispatchEvent(new window.CompositionEvent('compositionend'));
+  input.addEventListener('keydown', event => event.preventDefault(), { capture: true, once: true }); key({});
+  assert.equal(sent.filter(packet => packet.event === 'send_message').length, 0);
+  input.maxLength = 3; input.value = 'abc'; input.setSelectionRange(3, 3); key({ ctrlKey: true }); assert.equal(input.value, 'abc');
+  input.maxLength = 20000; input.value = 'swapped message';
+  assert.equal(key({}).defaultPrevented, true); assert.equal(sent.find(packet => packet.event === 'send_message').data.content, 'swapped message');
+  window.clearTimeout(app.typingTimeout);
+});
+
 test('internal image and link drags cannot resend files; external drops and clipboard uploads still work', t => {
   const { window, app, input } = chatApp(t);
   const uploaded = []; app.uploadFile = file => uploaded.push(file);

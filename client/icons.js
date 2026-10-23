@@ -13,6 +13,7 @@ window.ChatIcons = (() => {
         smile: '<circle cx="12" cy="12" r="9"/><path d="M8 14a4 4 0 0 0 8 0M8 9h.01M16 9h.01"/>',
         preview: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12Z"/><circle cx="12" cy="12" r="3"/>',
         send: '<path d="m3 3 19 9-19 9 3-9-3-9Zm3 9h16"/>',
+        keyboard: '<rect x="2" y="5" width="20" height="14" rx="3"/><path d="M6 9h.01M10 9h.01M6 13h.01M10 13h.01M6 16h8m4-7v4h-4m2-2-2 2 2 2"/>',
         invite: '<circle cx="9" cy="8" r="4"/><path d="M2 21v-2a7 7 0 0 1 12-5m4-3v8m-4-4h8"/>',
         requests: '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="m8 12 3 3 5-6"/>',
         history: '<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6m3-4v6l4 2"/>',

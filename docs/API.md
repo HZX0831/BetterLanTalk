@@ -1,6 +1,6 @@
 # BetterLanTalk API
 
-本文对应 `v1.3.0-beta.1` 预发布版本，包含新的群组、Bot、提及及通知档位。源码版和独立程序提供相同接口。原有房间创建／直接加人接口已经停用，见最后一节。
+本文对应 `v1.3.0` 正式版本，包含新的群组、Bot、提及及通知档位。源码版和独立程序提供相同接口。原有房间创建／直接加人接口已经停用，见最后一节。
 
 ## 请求与权限
 
@@ -26,8 +26,8 @@
 | `PUT /api/friend-requests/:id` | 申请当事人 | `{action:"accept"或"reject"或"withdraw"}`；接受后返回私聊 room |
 | `DELETE /api/friends/:userId` | 登录 | 删除自己的好友关系；历史保留 |
 | `POST /api/direct-chats` | 好友 | `{userId}`；返回 `{room}` |
-| `GET /api/preferences` | 登录 | `{theme,accent,preview}`，默认 `light/#1687f8/true` |
-| `PUT /api/preferences` | 登录 | 可部分提交；theme 为 `light/dark/system`；accent 为六位十六进制色值 |
+| `GET /api/preferences` | 登录 | `{theme,accent,preview,sendMode}`，默认 `light/#1687f8/true/ctrl-enter` |
+| `PUT /api/preferences` | 登录 | 可部分提交；theme 为 `light/dark/system`；accent 为六位十六进制色值；sendMode 为 `ctrl-enter`（Ctrl+Enter 发送）或 `enter`（Enter 发送），另一组合换行 |
 | `PUT /api/rooms/:roomId/settings` | 会话成员 | 部分提交 `nickname/remark/pinned/notificationMode/opened`；`clear:true` 清空个人记录视图；返回 `{settings}` |
 
 群昵称对群内可见，备注仅本人可见。个人清空不删除他人记录及共享精华；消息列表、搜索、引用和上下文遵守个人可见范围。好友列表和聊天最近会话分开，私聊 `opened` 或有新消息后进入最近会话。
@@ -56,7 +56,8 @@
 | `PUT /api/groups/:roomId` | 群管理 | `announcement` 群管理可改；名称、公开性、入群规则及问题仅群主可改 |
 | `POST /api/groups/:roomId/join` | 登录 | `{invitationId?,answers?:string[]}`；返回 `{room}` 或 `{pending:true,application}` |
 | `POST /api/groups/:roomId/invitations` | 群成员且为目标好友 | `{userId}`；返回 `{invitation,link}`，不会直接加人 |
-| `GET /api/group-invitations` | 登录 | 本人有效待处理邀请，含问题和入群方式 |
+| `PUT /api/group-invitations/:id` | 邀请接收人 | `{action:"reject"}` 拒绝；同时撤回关联的待审核申请，返回 `{success:true}`；重复处理 409 |
+| `GET /api/group-invitations` | 登录 | 本人有效待处理邀请，含问题、入群方式及 `applicationStatus`（`pending` 表示待审核，否则 `null`） |
 | `GET /api/groups/:roomId/applications` | 群管理 | 待审申请、申请人及回答 |
 | `PUT /api/groups/:roomId/applications/:id` | 群管理 | `{action:"accept"或"reject"}` |
 | `PUT /api/groups/:roomId/members/:userId/role` | 群主 | `{role:"admin"或"member"}`；可任命 Bot |
@@ -134,6 +135,8 @@
 | `GET /api/status`、`GET /api/health`、`GET /api/limits` | 公开 | 版本／运行状态／上传额度 |
 
 普通管理员只能修改普通用户及自身；调整其他管理员或超级管理员绑定需超级管理员。解绑后，账号下次正确密码登录绑定当时实际来源 IP。Bot 没有绑定 IP。
+
+配置和账号使用 [可信存储](SECURITY-STORAGE.md)：合法 API 修改更新恢复基准，直接修改 `config.json` / `users.json` 会被恢复。首次升级需要本地 `--init-security`；不存在远程初始化或重置安全基线接口。
 
 ## Bot API
 

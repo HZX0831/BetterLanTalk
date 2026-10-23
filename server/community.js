@@ -117,12 +117,13 @@ module.exports = function communityService(ctx) {
     }));
     app.get('/api/accounts/audit/ip-binding', adminMiddleware, (req, res) => res.json(state.audit));
 
-    app.get('/api/preferences', authMiddleware, (req, res) => res.json({ theme: 'light', accent: '#1687f8', preview: true, ...(state.preferences[req.auth.id]?.appearance || {}) }));
+    app.get('/api/preferences', authMiddleware, (req, res) => res.json({ theme: 'light', accent: '#1687f8', preview: true, sendMode: 'ctrl-enter', ...(state.preferences[req.auth.id]?.appearance || {}) }));
     app.put('/api/preferences', authMiddleware, route((req, res) => {
         const patch = {};
         if (req.body.theme !== undefined) { if (!['light', 'dark', 'system'].includes(req.body.theme)) fail(400, '主题无效'); patch.theme = req.body.theme; }
         if (req.body.accent !== undefined) { if (!/^#[\da-f]{6}$/i.test(req.body.accent)) fail(400, '颜色无效'); patch.accent = req.body.accent; }
         if (req.body.preview !== undefined) { if (typeof req.body.preview !== 'boolean') fail(400, '预览设置无效'); patch.preview = req.body.preview; }
+        if (req.body.sendMode !== undefined) { if (!['ctrl-enter', 'enter'].includes(req.body.sendMode)) fail(400, '发送方式无效'); patch.sendMode = req.body.sendMode; }
         state.preferences[req.auth.id] ||= { rooms: {}, appearance: {} };
         Object.assign(state.preferences[req.auth.id].appearance ||= {}, patch); save(); res.json({ success: true });
     }));
@@ -209,9 +210,19 @@ module.exports = function communityService(ctx) {
         io.emit('community_changed'); res.json({ invitation, link: '/chat?invitation=' + invitation.id });
     }));
     app.get('/api/group-invitations', authMiddleware, (req, res) => res.json(state.invitations.filter(item => item.to === req.auth.id && item.status === 'pending')
-        .filter(item => rooms.has(item.roomId) && areFriends(item.from, item.to) && rooms.get(item.roomId).memberIds.includes(item.from))
+        .filter(item => rooms.has(item.roomId) && !rooms.get(item.roomId).archived && !rooms.get(item.roomId).memberIds.includes(item.to) && areFriends(item.from, item.to) && rooms.get(item.roomId).memberIds.includes(item.from))
         .map(item => { const room = rooms.get(item.roomId); return { ...item, roomName: room.name, fromName: accountById(item.from)?.username,
+            applicationStatus: state.applications.some(application => application.invitationId === item.id && application.userId === req.auth.id && application.status === 'pending') ? 'pending' : null,
             joinMode: room.joinMode || 'open', questions: (room.questions || []).map(question => question.question) }; })));
+    app.put('/api/group-invitations/:id', authMiddleware, route((req, res) => {
+        const invitation = state.invitations.find(item => item.id === req.params.id && item.to === req.auth.id);
+        if (!invitation) fail(404, '邀请不存在');
+        if (req.body.action !== 'reject') fail(400, '邀请操作无效');
+        if (invitation.status !== 'pending') fail(409, '邀请已处理');
+        invitation.status = 'rejected';
+        for (const application of state.applications.filter(item => item.invitationId === invitation.id && item.status === 'pending')) application.status = 'withdrawn';
+        save(); io.emit('community_changed'); res.json({ success: true });
+    }));
     app.get('/api/groups/:roomId/applications', authMiddleware, route((req, res) => {
         const room = group(req.params.roomId, req.auth); manager(req.auth, room);
         res.json(state.applications.filter(item => item.roomId === room.id && item.status === 'pending').map(item => ({ ...item, user: profile(accountById(item.userId)) })));
@@ -490,7 +501,7 @@ module.exports = function communityService(ctx) {
     autoRequests(); save();
     return { profile, role, preferences, history, info, members, autoRequests, decorate, publish, send, notifyState,
         eligible: (account, room, message) => policy.eligible(preferences(account, room.id).notificationMode, message, account.id),
-        appearance: account => ({ theme: 'light', accent: '#1687f8', preview: true, ...(state.preferences[account.id]?.appearance || {}) }),
+        appearance: account => ({ theme: 'light', accent: '#1687f8', preview: true, sendMode: 'ctrl-enter', ...(state.preferences[account.id]?.appearance || {}) }),
         canDeleteAccount: account => ![...rooms.values()].some(room => !room.archived && room.ownerId === account.id),
         botAuth, botUpdate, isInternalBot: req => !!req.botInternal };
 };

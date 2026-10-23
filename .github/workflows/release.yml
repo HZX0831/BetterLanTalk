@@ -2,8 +2,7 @@ name: Build release executables
 
 on:
   push:
-    branches: [feat/jiyu-popup-notification]
-    paths: [.github/workflows/release.yml]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:

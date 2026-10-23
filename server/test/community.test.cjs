@@ -135,9 +135,10 @@ test('group roles, admission, message entities, personal settings, Bots and IP g
         await api('/api/users/alice', admin.token, { method: 'DELETE', status: 409 });
     });
     await t.test('preferences, role data, Bot queue and identity survive restart; removal revokes history', async () => {
-        await api('/api/preferences', bob.token, { method: 'PUT', body: { theme: 'dark', accent: '#20a278', preview: false } });
+        await api('/api/preferences', bob.token, { method: 'PUT', body: { sendMode: 'invalid' }, status: 400 });
+        await api('/api/preferences', bob.token, { method: 'PUT', body: { theme: 'dark', accent: '#20a278', preview: false, sendMode: 'enter' } });
         await f.stop(); await f.start();
-        assert.deepEqual(await api('/api/preferences', bob.token), { theme: 'dark', accent: '#20a278', preview: false });
+        assert.deepEqual(await api('/api/preferences', bob.token), { theme: 'dark', accent: '#20a278', preview: false, sendMode: 'enter' });
         assert.equal((await api('/api/groups/' + group.id, alice.token)).announcement, 'Bot 公告');
         assert.equal((await api('/api/rooms', bob.token)).find(item => item.id === group.id).settings.notificationMode, 'none');
         assert.ok((await api('/api/bot/v1/updates', bot.token)).updates.length > 0);

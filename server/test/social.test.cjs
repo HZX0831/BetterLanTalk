@@ -5,7 +5,7 @@ const { fixture, receive } = require('./fixture.cjs');
 const password = 'social-test-password';
 const seed = () => ({
   'users.json': { users: ['admin', 'alice', 'bob', 'charlie'].map((username, i) => ({
-    username, role: i === 0 ? 'admin' : 'user', salt: username,
+    username, role: i === 0 ? 'superadmin' : 'user', salt: username,
     passwordHash: crypto.scryptSync(password, username, 64).toString('hex'), registeredIp: '', createdAt: i + 1
   })), tokens: {} },
   'rooms.json': { rooms: [{ id: 'legacy', name: '旧公开群', isPublic: true, members: [], createdBy: 'admin', created: 1 }] }

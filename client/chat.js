@@ -51,10 +51,22 @@
                 const messageInput = document.getElementById('message-input');
                 const sendButton = document.getElementById('send-button');
                 sendButton.addEventListener('click', () => this.sendMessage());
+                messageInput.addEventListener('compositionstart', () => { this.composingMessage = true; });
+                messageInput.addEventListener('compositionend', () => { this.composingMessage = false; });
                 messageInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey && !e.isComposing && e.keyCode !== 229) {
+                    if (e.key !== 'Enter' || e.defaultPrevented || e.altKey || e.isComposing || this.composingMessage || e.keyCode === 229) return;
+                    const modified = e.ctrlKey || e.metaKey;
+                    const enterSends = this.appearance?.sendMode === 'enter';
+                    if (enterSends ? !modified && !e.shiftKey : modified) {
                         e.preventDefault();
                         this.sendMessage();
+                    } else if (enterSends && modified) {
+                        e.preventDefault();
+                        const start = messageInput.selectionStart, end = messageInput.selectionEnd;
+                        if (!messageInput.disabled && messageInput.value.length - (end - start) < messageInput.maxLength) {
+                            messageInput.setRangeText('\n', start, end, 'end');
+                            messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
                     }
                 });
                 messageInput.addEventListener('input', () => this.handleTyping());
@@ -782,7 +794,6 @@ Object.assign(ChatApp.prototype, {
     },
     initializeSocialEvents() {
         document.getElementById('conversation-search').addEventListener('input', () => this.renderConversations());
-        document.getElementById('friend-requests-btn').onclick = () => document.getElementById('friend-requests').classList.toggle('hidden');
         document.getElementById('people-search-form').onsubmit = async event => {
             event.preventDefault();
             try { const people = await this.request('/api/people?q=' + encodeURIComponent(document.getElementById('people-search').value)); this.renderPeople(people); }
@@ -815,20 +826,6 @@ Object.assign(ChatApp.prototype, {
         row.append(name, button); container.append(row); return row;
     },
     renderSocial() {
-        const incoming = this.social.requests.filter(request => request.to === this.currentUserId);
-        document.getElementById('request-count').textContent = incoming.length ? '(' + incoming.length + ')' : '';
-        const panel = document.getElementById('friend-requests'); panel.replaceChildren();
-        if (!this.social.requests.length) panel.textContent = '暂无好友申请';
-        for (const request of this.social.requests) {
-            const received = request.to === this.currentUserId;
-            const act = action => this.request('/api/friend-requests/' + encodeURIComponent(request.id), { method: 'PUT', body: { action } });
-            const row = this.makeActionRow(panel, received ? request.fromUser : '已申请 ' + request.toUser,
-                received ? '接受' : '撤回', () => act(received ? 'accept' : 'withdraw'));
-            if (received) {
-                const reject = document.createElement('button'); reject.textContent = '拒绝';
-                reject.onclick = () => act('reject').catch(error => this.showToast(error.message)); row.append(reject);
-            }
-        }
         this.renderConversations(); this.updateUserList(this.currentMembers); this.renderConversationActions();
         if (this.peopleResults) this.renderPeople(this.peopleResults);
     },

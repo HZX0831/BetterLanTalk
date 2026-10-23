@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const { fixture, receive } = require('./fixture.cjs');
 const password = 'roles-password';
 const seed = {
- 'users.json': { users: ['admin','manager','outsider'].map((username,i) => ({ username, role: i ? 'user' : 'admin', salt: username, passwordHash: crypto.scryptSync(password,username,64).toString('hex'), registeredIp:'', createdAt:i+1 })), tokens:{} },
+ 'users.json': { users: ['admin','manager','outsider'].map((username,i) => ({ username, role: i ? 'user' : 'superadmin', salt: username, passwordHash: crypto.scryptSync(password,username,64).toString('hex'), registeredIp:'', createdAt:i+1 })), tokens:{} },
  'rooms.json': { membershipVersion:2, rooms:[{ id:'legacy', name:'旧群', kind:'group', isPublic:true, createdBy:'admin', members:[], created:1 }] },
  'messages.json': { rooms:{ legacy:[{ id:'retained', content:'archive history', timestamp:1 }], default:[{ id:'retained-default', content:'default history', timestamp:2 }] } }
 };

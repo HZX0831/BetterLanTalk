@@ -53,3 +53,7 @@ server/community.json
 server/avatars/
 
 .lantalk-bot-cursor.json
+
+# 可信存储标记与原子写入临时副本
+server/.security-initialized
+server/*.json.*.tmp

@@ -9,13 +9,29 @@
     Object.assign(ChatApp.prototype, {
         initializeCommunity() {
             this.activeView = 'chats'; this.contactTab = 'friends'; this.messageCache = new Map(); this.mentionChoices = new Map();
-            this.appearance = { theme: 'light', accent: '#1687f8', preview: true };
+            this.appearance = { theme: 'light', accent: '#1687f8', preview: true, sendMode: 'ctrl-enter' };
             this.systemTheme = matchMedia('(prefers-color-scheme: dark)');
             this.systemTheme.addEventListener('change', () => this.applyAppearance(this.appearance));
-            $('nav-chats').onclick = () => this.setView('chats'); $('nav-contacts').onclick = () => this.setView('contacts');
+            $('new-friends-btn').onclick = () => this.openRequests('friends');
+            $('group-invitations-btn').onclick = () => this.openRequests('invitations');
+            $('nav-chats').onclick = () => { this.setView('chats'); this.closePanels(); };
+            $('nav-contacts').onclick = () => {
+                this.setView('contacts');
+                if (matchMedia('(max-width:699px)').matches) {
+                    $('chat-details').classList.remove('is-open'); $('conversation-sidebar').classList.toggle('is-open'); this.updatePanelState?.();
+                }
+            };
             $('toolbox-btn').onclick = () => { $('toolbox').classList.toggle('hidden'); $('toolbox-btn').setAttribute('aria-expanded', String(!$('toolbox').classList.contains('hidden'))); };
             $('profile-btn').onclick = safe(this, () => this.openProfile()); $('theme-btn').onclick = () => this.openTheme();
             $('preview-toggle').onclick = safe(this, () => this.saveAppearance({ preview: !this.appearance.preview }));
+            $('send-mode-toggle').onclick = safe(this, async () => {
+                const button = $('send-mode-toggle'); button.disabled = true;
+                try {
+                    await this.saveAppearance({ sendMode: this.appearance.sendMode === 'enter' ? 'ctrl-enter' : 'enter' });
+                    this.showToast(this.appearance.sendMode === 'enter' ? 'Enter 发送 · Ctrl+Enter 换行' : 'Ctrl+Enter 发送 · Enter 换行');
+                    $('message-input').focus();
+                } finally { button.disabled = false; }
+            });
             $('create-group-btn').onclick = () => this.editGroup(); $('discover-btn').onclick = safe(this, () => this.discoverGroups());
             $('group-settings-btn').onclick = safe(this, () => this.openChatSettings());
             $('invite-btn').onclick = safe(this, () => this.inviteFriends()); $('review-btn').onclick = safe(this, () => this.reviewApplications());
@@ -24,7 +40,7 @@
             $('emoji-btn').onclick = () => this.openEmojiPicker();
             $('dialog-close').onclick = () => $('app-dialog').close();
             $('app-dialog').addEventListener('click', event => { if (event.target === $('app-dialog')) { const rect = event.target.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) event.target.close(); } });
-            $('contact-tabs').querySelectorAll('button').forEach(button => { button.onclick = () => { this.contactTab = button.dataset.tab; this.renderConversations(); }; });
+            $('contact-tabs').querySelectorAll('button').forEach(button => { button.onclick = () => { this.contactTab = button.dataset.tab; this.requestsView = null; this.renderRequestPage(); this.renderConversations(); }; });
             document.addEventListener('click', event => {
                 if (!event.target.closest('#message-menu')) $('message-menu').classList.add('hidden');
                 if (!event.target.closest('#emoji-picker, #emoji-btn, #message-menu, .reaction-chip')) $('emoji-picker').classList.add('hidden');
@@ -46,6 +62,13 @@
             document.documentElement.style.setProperty('--accent', this.appearance.accent);
             $('composer-panes').classList.toggle('no-preview', !this.appearance.preview);
             $('preview-toggle').setAttribute('aria-pressed', String(this.appearance.preview));
+            const enterSends = this.appearance.sendMode === 'enter';
+            const modeLabel = (enterSends ? 'Enter 发送，Ctrl+Enter 换行' : 'Ctrl+Enter 发送，Enter 换行') + '；点击交换';
+            const sendLabel = enterSends ? '发送（Enter）' : '发送（Ctrl+Enter）';
+            for (const [id, label] of [['send-mode-toggle', modeLabel], ['send-button', sendLabel]]) {
+                $(id).dataset.label = label; $(id).title = label; $(id).setAttribute('aria-label', label);
+            }
+            $('send-mode-toggle').setAttribute('aria-pressed', String(enterSends));
         },
         async saveAppearance(patch) { await this.request('/api/preferences', { method: 'PUT', body: patch }); this.applyAppearance(patch); },
         openTheme() {
@@ -66,12 +89,13 @@
         setView(view) {
             this.activeView = view; document.body.dataset.view = view;
             $('nav-chats').classList.toggle('selected', view === 'chats'); $('nav-contacts').classList.toggle('selected', view === 'contacts');
-            $('contact-tabs').classList.toggle('hidden', view !== 'contacts'); this.renderConversations(); this.sendClientState();
+            $('contact-request-entries').classList.toggle('hidden', view !== 'contacts');
+            $('contact-tabs').classList.toggle('hidden', view !== 'contacts'); this.renderRequestPage(); this.renderConversations(); this.sendClientState();
             if (view === 'chats') this.notifications.markRead();
         },
         joinRoom(id, name) {
             this.setView('chats');
-            $('friend-requests').classList.add('hidden'); $('emoji-picker').classList.add('hidden'); $('message-menu').classList.add('hidden');
+            $('emoji-picker').classList.add('hidden'); $('message-menu').classList.add('hidden');
             this.request('/api/rooms/' + encodeURIComponent(id) + '/settings', { method: 'PUT', body: { opened: true } }).catch(() => {});
             old.joinRoom.call(this, id, name);
         },
@@ -117,12 +141,44 @@
         renderSocial() { old.renderSocial.call(this); this.renderInvitations(); },
         async loadInvitations() { this.invitations = await this.request('/api/group-invitations'); this.renderInvitations(); },
         renderInvitations() {
-            document.querySelectorAll('.group-invitation').forEach(element => element.remove());
-            for (const invitation of this.invitations || []) {
-                const row = this.makeActionRow($('friend-requests'), invitation.fromName + ' 邀请加入 ' + invitation.roomName, '查看', () => this.applyToGroup({ ...invitation, id: invitation.roomId, name: invitation.roomName }, invitation.id)); row.classList.add('group-invitation');
+            const friends = this.social.requests.filter(item => item.to === this.currentUserId).length;
+            const invitations = (this.invitations || []).filter(item => item.applicationStatus !== 'pending').length;
+            for (const [id, count] of [['contacts-request-count', friends + invitations], ['friend-request-count', friends], ['invitation-count', invitations]]) {
+                $(id).textContent = count > 99 ? '99+' : count || ''; $(id).classList.toggle('hidden', !count);
             }
-            const count = this.social.requests.filter(item => item.to === this.currentUserId).length + (this.invitations?.length || 0);
-            $('request-count').textContent = count || '';
+            const label = '联系人' + (friends + invitations ? '，' + (friends + invitations) + ' 项待处理' : '');
+            $('nav-contacts').dataset.label = label; $('nav-contacts').setAttribute('aria-label', label); $('nav-contacts').title = label;
+            this.renderRequestPage();
+        },
+        openRequests(view) { this.requestsView = view; this.setView('contacts'); this.closePanels(); },
+        renderRequestPage() {
+            const visible = this.activeView === 'contacts' && !!this.requestsView;
+            $('contact-requests').classList.toggle('hidden', !visible); $('contact-profile').classList.toggle('hidden', visible);
+            document.querySelector('.friend-search').classList.toggle('hidden', visible);
+            $('new-friends-btn').classList.toggle('selected', visible && this.requestsView === 'friends');
+            $('group-invitations-btn').classList.toggle('selected', visible && this.requestsView === 'invitations');
+            if (!visible) return;
+            const panel = $('contact-requests'); panel.replaceChildren(E('h2', '', this.requestsView === 'friends' ? '新朋友' : '群邀请'));
+            if (this.requestsView === 'friends') {
+                if (!this.social.requests.length) panel.append(E('p', 'empty-state', '暂无好友申请'));
+                for (const request of this.social.requests) {
+                    const incoming = request.to === this.currentUserId;
+                    const act = async action => { await this.request('/api/friend-requests/' + encodeURIComponent(request.id), { method: 'PUT', body: { action } }); await this.loadSocial(); };
+                    const row = this.makeActionRow(panel, incoming ? request.fromUser : '已申请 ' + request.toUser, incoming ? '接受' : '撤回', () => act(incoming ? 'accept' : 'withdraw'));
+                    if (incoming) { const button = E('button', '', '拒绝'); button.onclick = safe(this, () => act('reject')); row.append(button); }
+                }
+            } else {
+                if (!this.invitations?.length) panel.append(E('p', 'empty-state', '暂无群邀请'));
+                for (const invitation of this.invitations || []) {
+                    const row = E('div', 'action-row'); row.dataset.invitationId = invitation.id;
+                    row.append(E('span', '', invitation.fromName + ' 邀请加入 ' + invitation.roomName));
+                    if (invitation.applicationStatus === 'pending') row.append(E('span', 'subtle', '待审核'));
+                    else { const accept = E('button', '', '查看'); accept.onclick = () => this.applyToGroup({ ...invitation, id: invitation.roomId, name: invitation.roomName }, invitation.id); row.append(accept); }
+                    const reject = E('button', '', invitation.applicationStatus === 'pending' ? '撤回' : '拒绝');
+                    reject.onclick = safe(this, async () => { await this.request('/api/group-invitations/' + invitation.id, { method: 'PUT', body: { action: 'reject' } }); await this.loadInvitations(); });
+                    row.append(reject); panel.append(row);
+                }
+            }
         },
         renderConversations() {
             const container = $('room-list'); container.replaceChildren();
@@ -156,11 +212,13 @@
             }
         },
         showContact(person) {
+            this.requestsView = null; this.renderRequestPage(); this.closePanels();
             const target = $('contact-profile'); target.replaceChildren(this.avatar(person, true), E('h2', '', person.username), E('p', 'subtle', person.kind === 'bot' ? 'Bot' : person.online ? '在线' : '离线'));
             if (person.about) target.append(E('p', '', person.about));
             target.append(iconButton('chat', '发消息', safe(this, () => this.openDirect(person.id))));
         },
         showGroupContact(room) {
+            this.requestsView = null; this.renderRequestPage(); this.closePanels();
             const target = $('contact-profile'); target.replaceChildren(this.avatar({ ...room, username: room.name }, true), E('h2', '', room.name), E('p', 'subtle', room.memberCount + ' 位成员'));
             target.append(iconButton('chat', '打开群聊', () => this.joinRoom(room.id)));
         },

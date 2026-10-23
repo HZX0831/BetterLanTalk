@@ -4,10 +4,10 @@ const { fixture, receive } = require('./fixture.cjs');
 const { io } = require('../node_modules/socket.io/client-dist/socket.io.js');
 const password = 'ip-policy-password';
 test('one account per actual device IP, including initial superadmin login, tokens, files and sockets', { timeout: 15000 }, async t => {
-  const users = ['admin', 'alice', 'bob'].map((username, index) => ({ username, role: index ? 'user' : 'admin',
+  const users = ['admin', 'alice', 'bob'].map((username, index) => ({ username, role: index ? 'user' : 'superadmin',
     salt: username, passwordHash: crypto.scryptSync(password, username, 64).toString('hex'),
     registeredIp: index === 0 ? '127.0.0.90' : index === 1 ? '127.0.0.3' : '',
-    ...(index === 0 ? { boundIp: '127.0.0.90' } : {}), createdAt: index + 1 }));
+    ...(index === 0 ? { boundIp: '' } : {}), createdAt: index + 1 }));
   const f = await fixture({ 'users.json': { users, tokens: { 'old-admin-token': { username: 'admin', expiresAt: Date.now() + 60000 } } } }); t.after(f.cleanup);
   const login = (username, sourceIp, status = 200, secret = password) => f.api('/api/login', null, { method: 'POST', sourceIp, status, body: { username, password: secret } });
   const readUsers = () => JSON.parse(fs.readFileSync(path.join(f.dir, 'users.json'), 'utf8')).users;
