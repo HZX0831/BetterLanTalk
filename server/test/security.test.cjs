@@ -1,6 +1,6 @@
 const { test } = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
-const { spawnSync } = require('node:child_process');
+const { spawnSync, execFileSync } = require('node:child_process');
 const { fixture } = require('./fixture.cjs');
 const { openProtectedStore } = require('../protected-store');
 const login = (f, username = 'admin', password = '=Aa1357924680') => f.api('/api/login', null, { method: 'POST', body: { username, password } });
@@ -46,6 +46,19 @@ test('signed state restores modified configuration and every authentication fiel
     if (process.platform !== 'win32') {
         assert.equal(fs.statSync(f.securityDir).mode & 0o777, 0o700);
         for (const name of ['key', 'state.json']) assert.equal(fs.statSync(path.join(f.securityDir, name)).mode & 0o777, 0o600);
+    } else {
+        // Inspect the actual ACL, including inherited key/state permissions, without module autoload.
+        const script = '$ErrorActionPreference="Stop"; $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; ' +
+            '$directory=$env:LANTALK_ACL_DIRECTORY; $acl=[System.IO.Directory]::GetAccessControl($directory); ' +
+            'if(!$acl.AreAccessRulesProtected){throw "Directory inherits permissions"}; ' +
+            'foreach($file in @($directory,($directory+"\\key"),($directory+"\\state.json"))) {' +
+            'if([System.IO.Directory]::Exists($file)){$a=[System.IO.Directory]::GetAccessControl($file)}else{$a=[System.IO.File]::GetAccessControl($file)}; ' +
+            '$rules=@($a.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])); ' +
+            'if($rules.Count -ne 2){throw "Unexpected ACL entries"}; ' +
+            'foreach($rule in $rules){if($rule.IdentityReference.Value -notin @($sid,"S-1-5-18") -or $rule.AccessControlType -ne "Allow" -or ' +
+            '$rule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl){throw "Unexpected ACL permission"}}}';
+        execFileSync(path.join(process.env.SystemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', script],
+            { env: { ...process.env, LANTALK_ACL_DIRECTORY: f.securityDir }, stdio: 'pipe', windowsHide: true });
     }
 });
 test('legal config, password, role, rename, IP and session changes become the latest recovery baseline', { timeout: 30000 }, async t => {

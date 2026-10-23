@@ -24,7 +24,7 @@ async function fixture(seed = {}) {
   async function start(initialize = false) {
     child = spawn(process.execPath, ['server.js', ...(initialize ? ['--init-security'] : [])], { cwd: dir, env: { ...process.env, PORT: String(port), LANTALK_OPEN_BROWSER: '0', LANTALK_SECURITY_DIR: securityDir, LANTALK_DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', data => output += data); child.stderr.on('data', data => output += data);
-    for (let i = 0; i < 100; i++) {
+    for (let i = 0; i < (process.platform === 'win32' ? 300 : 100); i++) {
       assert.equal(child.exitCode, null, output);
       try { if ((await fetch(base + '/api/health')).ok) return; } catch {}
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -46,7 +46,8 @@ async function fixture(seed = {}) {
     const connected = receive(socket, 'connect'); socket.connect(); await connected;
     const joined = receive(socket, 'message_history'); socket.emit('join', { token }); await joined; return socket;
   }
-  await start(Object.keys(seed).length > 0);
+  try { await start(Object.keys(seed).length > 0); }
+  catch (error) { await stop(); fs.rmSync(root, { recursive: true, force: true }); throw error; }
   return { root, dir, base, securityDir, start, stop, api, connect, output: () => output, request: (route, token) => request(base + route, { localAddress: sourceFor(dir, token), headers: { authorization: 'Bearer ' + token } }), cleanup: async () => { await stop(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 module.exports = { fixture, receive };

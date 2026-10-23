@@ -25,7 +25,7 @@ function secureDirectory(directory) {
             '$acl.SetAccessRuleProtection($true,$false); $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl.SetOwner($sid); ' +
             'foreach($id in @($sid,(New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")))) {' +
             '$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($id,"FullControl","ContainerInherit,ObjectInherit","None","Allow"); $acl.AddAccessRule($rule)}; ' +
-            'Set-Acl -LiteralPath $env:LANTALK_ACL_DIRECTORY -AclObject $acl';
+            '[System.IO.Directory]::SetAccessControl($env:LANTALK_ACL_DIRECTORY,$acl)';
         execFileSync(path.join(system, 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Command', script],
             { env: { ...process.env, LANTALK_ACL_DIRECTORY: directory }, stdio: 'pipe', windowsHide: true });
     } else {
