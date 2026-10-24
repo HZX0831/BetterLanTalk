@@ -111,6 +111,7 @@ module.exports = function communityService(ctx) {
         let ip = req.body.ip;
         if (typeof ip === 'string') ip = ip.replace(/^::ffff:/i, '');
         if (ip !== null && (typeof ip !== 'string' || !isIP(ip))) fail(400, 'IP 地址无效');
+        if (target.role === 'superadmin' && ctx.superadminIP() && ip !== ctx.superadminIP()) fail(409, '超级管理员 IP 由 config.json 的 superadminIP 指定，请修改文件后重启');
         if (ip && userStore.users.some(account => account.id !== target.id && account.boundIp === ip)) fail(409, 'IP 已被其他账号占用');
         state.audit.push({ actorId: req.auth.id, targetId: target.id, action: 'ip-binding', oldIp: target.boundIp, newIp: ip || '', timestamp: Date.now() });
         target.boundIp = ip || ''; save(); revoke(target); res.json({ success: true, boundIp: target.boundIp });

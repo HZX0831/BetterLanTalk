@@ -7,7 +7,7 @@ const { io } = require('../node_modules/socket.io/client-dist/socket.io.js');
 const { receive } = require('./fixture.cjs');
 
 (async () => {
-  const name = process.platform === 'win32' ? 'BetterLanTalk-win-x64.exe' : 'BetterLanTalk-linux-x64';
+  const name = 'BetterLanTalk-linux-x64';
   const source = path.resolve(process.argv[2] || path.join(__dirname, '../../dist', name));
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'lantalk-packaged-'));
   const binDir = path.join(root, 'bin'), cwd = path.join(root, 'empty-workdir');
@@ -19,7 +19,7 @@ const { receive } = require('./fixture.cjs');
   const base = 'http://127.0.0.1:' + port;
   let child, socket, output = '';
   async function start(dataOverride) {
-    const env = { ...process.env, PORT: String(port), LANTALK_SECURITY_DIR: path.join(root, dataOverride ? 'private-custom' : 'private'), PATH: cwd, LANTALK_OPEN_BROWSER: '0' };
+    const env = { ...process.env, PORT: String(port), PATH: cwd, LANTALK_OPEN_BROWSER: '0' };
     delete env.NODE_PATH; delete env.NODE_OPTIONS; delete env.LANTALK_DATA_DIR;
     if (dataOverride) env.LANTALK_DATA_DIR = dataOverride;
     child = spawn(binary, [], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -84,16 +84,16 @@ const { receive } = require('./fixture.cjs');
     const avatar = await api('/api/me/avatar', token, { method: 'PUT', body: PNG.sync.write(png), headers: { 'content-type': 'application/octet-stream' } });
     assert.ok(fs.existsSync(path.join(data, 'avatars', path.basename(avatar.avatar))));
     await api('/api/config', token, { method: 'PUT', body: { jiyuPort: 4999 } });
-    // Only the private signed state survives these malicious edits.
-    const trustedAccounts = fs.readFileSync(path.join(data, 'users.json'), 'utf8');
-    fs.writeFileSync(path.join(data, 'config.json'), '{broken');
-    const changed = JSON.parse(trustedAccounts); changed.users.push({ id: 'evil', username: 'evil', role: 'superadmin' });
-    fs.writeFileSync(path.join(data, 'users.json'), JSON.stringify(changed));
+    // Ordinary account and config edits both survive restart.
+    const storedAccounts = JSON.parse(fs.readFileSync(path.join(data, 'users.json'), 'utf8'));
+    const editedConfig = JSON.parse(fs.readFileSync(path.join(data, 'config.json'))); editedConfig.jiyuPort = 5000;
+    fs.writeFileSync(path.join(data, 'config.json'), JSON.stringify(editedConfig));
+    storedAccounts.users.find(account => account.id === bot.bot.id).about = 'edited in JSON';
+    fs.writeFileSync(path.join(data, 'users.json'), JSON.stringify(storedAccounts));
     await stop(); await start();
-    assert.equal(fs.readFileSync(path.join(data, 'users.json'), 'utf8'), trustedAccounts);
-    assert.ok(fs.existsSync(path.join(root, 'private', 'key')));
+    assert.equal((await api('/api/bot/v1/me', bot.token)).about, 'edited in JSON');
     assert.equal((await api('/api/me', token)).boundIp, '127.0.0.1');
-    assert.equal((await api('/api/config', token)).jiyuPort, 4999);
+    assert.equal((await api('/api/config', token)).jiyuPort, 5000);
     assert.equal((await api('/api/groups/' + group.id, token)).announcement, 'persisted announcement');
     assert.equal((await api('/api/rooms', token)).find(room => room.id === group.id).settings.notificationMode, 'important');
     assert.equal((await api('/api/preferences', token)).preview, false);

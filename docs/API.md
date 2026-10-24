@@ -6,7 +6,7 @@
 
 默认地址 `http://<服务器IP>:3001`。除文件和头像上传外，请求体为 JSON；成功返回 HTTP 200，数组接口直接返回数组；错误通常为 `{"error":"说明"}`。时间为 Unix 毫秒，ID 为不透明字符串。
 
-人类账号使用 `Authorization: Bearer <token>` 或 `lantalk_session` HttpOnly Cookie（Bearer 优先），token 有效期 7 天。注册绑定来源 IP；初始超级管理员在首次成功登录时绑定。HTTP、源文件、附件及 Socket 均校验实际 TCP 对端 IP，不信任转发头。管理员换绑或解绑会撤销该账号所有会话。Bot 使用专用令牌和专用路径，不接受普通登录，也不能读取前端或后台源码。
+人类账号使用 `Authorization: Bearer <token>` 或 `lantalk_session` HttpOnly Cookie（Bearer 优先），token 有效期 7 天。注册绑定来源 IP；初始超级管理员优先使用 `config.json` 的 `superadminIP`，留空时首次成功登录绑定。HTTP、源文件、附件及 Socket 均校验实际 TCP 对端 IP，不信任转发头。管理员换绑或解绑会撤销该账号所有会话。Bot 使用专用令牌和专用路径，不接受普通登录，也不能读取前端或后台源码。
 
 权限独立分为全站 `user/admin/superadmin` 和群内 `member/admin/owner`。全站管理员不会自动成为普通群管理员，也不能读取未加入群组的记录。默认公共聊天室由全站管理员管理。删除好友后私聊只读；未入群、退群、移出或群解散后不能读取群消息及附件。
 
@@ -127,7 +127,7 @@
 | `GET /api/users` | 全站管理员 | 当前在线连接 |
 | `POST /api/mute-ip`、`POST /api/unmute-ip` | 全站管理员 | `{ip}` |
 | `GET /api/muted-ips` | 登录 | 被禁言 IP 列表 |
-| `GET /api/config`、`PUT /api/config` | 全站管理员 | `port/maxFileMB/maxUploadsMB/serverIP/jiyuEnabled/jiyuPort`；端口重启生效，其余按现有规则生效 |
+| `GET /api/config`、`PUT /api/config` | 全站管理员 | 可写 `port/maxFileMB/maxUploadsMB/serverIP/jiyuEnabled/jiyuPort`；GET 还返回 `superadminIP`，该字段仅能在 JSON 中修改后重启；端口重启生效 |
 | `POST /api/broadcast` | 全站管理员 | `{message}`，全站群广播，不发送私聊 |
 | `GET /api/jiyu/devices` | 全站管理员 | 只读账号绑定 IP |
 | `POST /api/jiyu/test` | 全站管理员 | `{userId}`；返回 sent/skipped/failed 等统计；UDP 发送成功不代表目标显示弹窗 |
@@ -136,7 +136,7 @@
 
 普通管理员只能修改普通用户及自身；调整其他管理员或超级管理员绑定需超级管理员。解绑后，账号下次正确密码登录绑定当时实际来源 IP。Bot 没有绑定 IP。
 
-配置和账号使用 [可信存储](SECURITY-STORAGE.md)：合法 API 修改更新恢复基准，直接修改 `config.json` / `users.json` 会被恢复。首次升级需要本地 `--init-security`；不存在远程初始化或重置安全基线接口。
+`config.json` 与 `users.json` 按普通 JSON 保存，手工修改需停服编辑、重启生效；没有签名、可信备份或自动恢复，也无需安全初始化。旧私有目录、密钥与安全标记不再读取，迁移见 [数据说明](DATA-MIGRATION.md)。设置 `superadminIP` 后，IP 绑定接口不能解绑或更换超管 IP；改动 JSON 后重启会撤销超管旧会话，IP 与其他账号冲突时拒绝启动。
 
 ## Bot API
 

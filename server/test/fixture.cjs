@@ -19,10 +19,9 @@ async function fixture(seed = {}) {
   for (const [file, data] of Object.entries(seed)) fs.writeFileSync(path.join(dir, file), JSON.stringify(data));
   const probe = net.createServer(); probe.listen(0, '127.0.0.1'); await once(probe, 'listening');
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
-  const securityDir = path.join(root, 'private');
   const base = 'http://127.0.0.1:' + port, sockets = []; let child, output = '';
-  async function start(initialize = false) {
-    child = spawn(process.execPath, ['server.js', ...(initialize ? ['--init-security'] : [])], { cwd: dir, env: { ...process.env, PORT: String(port), LANTALK_OPEN_BROWSER: '0', LANTALK_SECURITY_DIR: securityDir, LANTALK_DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'] });
+  async function start() {
+    child = spawn(process.execPath, ['server.js'], { cwd: dir, env: { ...process.env, PORT: String(port), LANTALK_OPEN_BROWSER: '0', LANTALK_DATA_DIR: dir }, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', data => output += data); child.stderr.on('data', data => output += data);
     for (let i = 0; i < (process.platform === 'win32' ? 300 : 100); i++) {
       assert.equal(child.exitCode, null, output);
@@ -46,8 +45,8 @@ async function fixture(seed = {}) {
     const connected = receive(socket, 'connect'); socket.connect(); await connected;
     const joined = receive(socket, 'message_history'); socket.emit('join', { token }); await joined; return socket;
   }
-  try { await start(Object.keys(seed).length > 0); }
+  try { await start(); }
   catch (error) { await stop(); fs.rmSync(root, { recursive: true, force: true }); throw error; }
-  return { root, dir, base, securityDir, start, stop, api, connect, output: () => output, request: (route, token) => request(base + route, { localAddress: sourceFor(dir, token), headers: { authorization: 'Bearer ' + token } }), cleanup: async () => { await stop(); fs.rmSync(root, { recursive: true, force: true }); } };
+  return { root, dir, base, start, stop, api, connect, output: () => output, request: (route, token) => request(base + route, { localAddress: sourceFor(dir, token), headers: { authorization: 'Bearer ' + token } }), cleanup: async () => { await stop(); fs.rmSync(root, { recursive: true, force: true }); } };
 }
 module.exports = { fixture, receive };

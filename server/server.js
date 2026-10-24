@@ -80,44 +80,47 @@ function saveJSON(file, data) {
     fs.renameSync(file + '.tmp', file);
 }
 
-// Ordinary JSON files are projections; authentication always uses the signed private state.
-const { openProtectedStore } = require('./protected-store');
-const protectedStore = openProtectedStore({ dataDir: DATA_DIR, initialize: process.argv.includes('--init-security'), initialState() {
-    const raw = loadJSON(CONFIG_FILE, null) || {};
-    const initialConfig = {
-        port: Number(raw.port || 3001), maxFileMB: Number(raw.maxFileMB || 5120), maxUploadsMB: Number(raw.maxUploadsMB || 20480),
-        serverIP: typeof raw.serverIP === 'string' ? raw.serverIP : '', jiyuEnabled: raw.jiyuEnabled === true,
-        jiyuPort: raw.jiyuPort === undefined ? 4988 : raw.jiyuPort
-    };
-    const initialUsers = loadJSON(USERS_FILE, null);
-    if (!initialUsers) {
-        const existingData = [USERS_FILE, CONFIG_FILE, ROOMS_FILE, MESSAGES_FILE, SOCIAL_FILE, FILES_FILE, path.join(DATA_DIR, 'community.json'), path.join(DATA_DIR, '.security-initialized')].some(file => fs.existsSync(file));
-        const existingMedia = [UPLOADS_DIR, path.join(DATA_DIR, 'avatars')].some(directory => fs.existsSync(directory) && fs.readdirSync(directory).length);
-        if (existingData || existingMedia) throw new Error('现有部署缺少有效账号文件，请恢复备份');
-        const salt = crypto.randomBytes(16).toString('hex');
-        return { config: initialConfig, users: { users: [{ id: crypto.randomUUID(), username: 'admin', salt,
-            passwordHash: hashPassword('=Aa1357924680', salt), role: 'superadmin', registeredIp: '', boundIp: '', createdAt: Date.now() }], tokens: {} } };
+// Configuration and accounts are ordinary JSON, loaded on startup and saved atomically.
+const { readConfig, writeConfig } = require('./config-store');
+const config = readConfig(CONFIG_FILE);
+let userStore = loadJSON(USERS_FILE, null);
+if (!userStore) {
+    const existingData = [USERS_FILE, ROOMS_FILE, MESSAGES_FILE, SOCIAL_FILE, FILES_FILE, path.join(DATA_DIR, 'community.json')].some(file => fs.existsSync(file));
+    const existingMedia = [UPLOADS_DIR, path.join(DATA_DIR, 'avatars')].some(directory => fs.existsSync(directory) && fs.readdirSync(directory).length);
+    if (existingData || existingMedia) throw new Error('现有部署缺少有效 users.json，请恢复账号数据');
+    const salt = crypto.randomBytes(16).toString('hex');
+    userStore = { users: [{ id: crypto.randomUUID(), username: 'admin', salt,
+        passwordHash: hashPassword('=Aa1357924680', salt), role: 'superadmin', registeredIp: '', boundIp: '', createdAt: Date.now() }], tokens: {} };
+}
+if (!Array.isArray(userStore.users) || userStore.users.filter(user => user?.role === 'superadmin').length !== 1) throw new Error('users.json 必须恰好包含一名超级管理员');
+if (userStore.users.some(user => !user?.id)) {
+    for (const file of [USERS_FILE, ROOMS_FILE]) if (fs.existsSync(file) && !fs.existsSync(file + '.pre-social.bak')) fs.copyFileSync(file, file + '.pre-social.bak');
+}
+if (userStore.users.some(user => typeof user.boundIp !== 'string') && fs.existsSync(USERS_FILE) && !fs.existsSync(USERS_FILE + '.pre-ip.bak')) fs.copyFileSync(USERS_FILE, USERS_FILE + '.pre-ip.bak');
+const accountIds = new Set(), accountNames = new Set();
+for (const account of userStore.users) {
+    if (!account.id) account.id = crypto.randomUUID();
+    if (!['user', 'admin', 'superadmin'].includes(account.role) || typeof account.username !== 'string' || !account.username || accountIds.has(account.id) || accountNames.has(account.username) ||
+        (account.kind === 'bot' ? account.role !== 'user' || typeof account.botTokenHash !== 'string' : typeof account.salt !== 'string' || typeof account.passwordHash !== 'string')) throw new Error('users.json 账号身份或角色无效');
+    accountIds.add(account.id); accountNames.add(account.username);
+    if (typeof account.boundIp !== 'string') account.boundIp = account.role === 'superadmin' ? '' : normalizeIp(account.registeredIp);
+    account.boundIp = normalizeIp(account.boundIp);
+}
+userStore.tokens ||= {};
+if (typeof userStore.tokens !== 'object' || Array.isArray(userStore.tokens)) throw new Error('users.json 会话数据无效');
+function saveUsers() { saveJSON(USERS_FILE, userStore); }
+// A configured superadmin IP overrides the saved binding only on startup.
+if (config.superadminIP) {
+    const owner = userStore.users.find(account => account.role === 'superadmin');
+    if (userStore.users.some(account => account.id !== owner.id && account.boundIp === config.superadminIP)) throw new Error('config.json 中 superadminIP 已被其他账号绑定，请先解除冲突');
+    if (owner.boundIp !== config.superadminIP) {
+        owner.boundIp = config.superadminIP;
+        for (const token of Object.keys(userStore.tokens)) if (userStore.tokens[token].username === owner.username) delete userStore.tokens[token];
+        saveUsers();
     }
-    if (!Array.isArray(initialUsers.users) || initialUsers.users.filter(user => user.role === 'superadmin').length !== 1) throw new Error('初始化要求现有账号中恰好一名超级管理员，不会自动提升账号');
-    if (initialUsers.users.some(user => !user.id)) {
-        for (const file of [USERS_FILE, ROOMS_FILE]) if (fs.existsSync(file) && !fs.existsSync(file + '.pre-social.bak')) fs.copyFileSync(file, file + '.pre-social.bak');
-    }
-    if (initialUsers.users.some(user => typeof user.boundIp !== 'string') && !fs.existsSync(USERS_FILE + '.pre-ip.bak')) fs.copyFileSync(USERS_FILE, USERS_FILE + '.pre-ip.bak');
-    for (const account of initialUsers.users) {
-        if (!account.id) account.id = crypto.randomUUID();
-        if (typeof account.boundIp !== 'string') account.boundIp = account.role === 'superadmin' ? '' : normalizeIp(account.registeredIp);
-        account.boundIp = normalizeIp(account.boundIp);
-    }
-    initialUsers.tokens ||= {};
-    return { config: initialConfig, users: initialUsers };
-} });
-console.log('私有保护目录：' + protectedStore.securityDir);
-const config = protectedStore.state.config;
-const userStore = protectedStore.state.users;
-function securityFailure(error) { console.error('安全存储失败，服务已停止：' + error.message); process.exit(1); }
-function saveUsers() { try { protectedStore.commit({ users: userStore }); } catch (error) { securityFailure(error); } }
-const integrityTimer = setInterval(() => { try { protectedStore.repair(); } catch (error) { securityFailure(error); } }, 2000);
-integrityTimer.unref();
+}
+writeConfig(CONFIG_FILE, config);
+saveUsers();
 
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 let fileStore = loadJSON(FILES_FILE, null) || { files: [] };
@@ -481,7 +484,7 @@ saveRooms();
 saveMessages();
 community = require('./community')({ app, authMiddleware, adminMiddleware, userStore, saveUsers, social, saveSocial,
     rooms, messages, saveRooms, saveMessages, accountById, areFriends, canAccessRoom, canSendRoom, canManageRoom,
-    roomInfo, syncRoomSubscriptions, io, users, roomChannel, DATA_DIR, loadJSON, saveJSON, processMarkdown, fileStore,
+    roomInfo, syncRoomSubscriptions, io, users, roomChannel, superadminIP: () => config.superadminIP, DATA_DIR, loadJSON, saveJSON, processMarkdown, fileStore,
     notifyJiyuRoom, broadcastRoomList, isMuted: account => mutedIPs.has(accountById(account.id)?.boundIp),
     emojiIds: new Set(require('../client/vendor/qq/manifest.json').map(item => item.id)) });
 
@@ -722,6 +725,7 @@ app.get('/api/config', adminMiddleware, (req, res) => {
         maxFileMB: config.maxFileMB,
         maxUploadsMB: config.maxUploadsMB,
         serverIP: config.serverIP || '',
+        superadminIP: config.superadminIP,
         jiyuEnabled: config.jiyuEnabled, jiyuPort: config.jiyuPort,
         detectedIP: getLocalIP(),
         localIP
@@ -755,6 +759,7 @@ app.get('/api/files', authMiddleware, (req, res) => {
 
 app.put('/api/config', adminMiddleware, (req, res) => {
     const { port, maxFileMB, maxUploadsMB, serverIP, jiyuEnabled, jiyuPort } = req.body;
+    if (req.body.superadminIP !== undefined) return res.status(400).json({ error: '请在 config.json 中修改 superadminIP 并重启服务' });
     if (jiyuEnabled !== undefined && typeof jiyuEnabled !== 'boolean') return res.status(400).json({ error: '极域开关必须为布尔值' });
     if (jiyuPort !== undefined && (!Number.isInteger(jiyuPort) || jiyuPort < 1 || jiyuPort > 65535)) return res.status(400).json({ error: '极域端口应为1-65535的整数' });
     const updated = [];
@@ -803,7 +808,7 @@ app.put('/api/config', adminMiddleware, (req, res) => {
 
     if (jiyuEnabled !== undefined) { nextConfig.jiyuEnabled = jiyuEnabled; updated.push('极域通知开关'); }
     if (jiyuPort !== undefined) { nextConfig.jiyuPort = jiyuPort; updated.push('极域端口'); }
-    try { protectedStore.commit({ config: nextConfig }); } catch (error) { return securityFailure(error); }
+    writeConfig(CONFIG_FILE, nextConfig);
     Object.assign(config, nextConfig);
     localIP = nextConfig.serverIP || getLocalIP();
     // 修改上限后立即按新上限清理一次

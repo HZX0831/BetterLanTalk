@@ -16,7 +16,7 @@ echo "[信息] Node.js 版本: $(node -v)"
 
 if [ ! -d node_modules ]; then
     echo "[信息] 首次运行，正在安装依赖..."
-    npm install --no-audit --no-fund || { echo "[错误] 依赖安装失败"; exit 1; }
+    npm ci --no-audit --no-fund || { echo "[错误] 依赖安装失败"; exit 1; }
 else
     echo "[信息] 依赖已存在，跳过安装"
 fi

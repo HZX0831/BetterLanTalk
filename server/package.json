@@ -6,7 +6,6 @@
   "bin": "server.js",
   "scripts": {
     "start": "node server.js",
-    "bundle": "pkg . --target node22-win-x64 --no-bytecode --public-packages \"*\" --public --output ../dist/BetterLanTalk-win-x64.exe",
     "bundle:linux": "pkg . --target node22-linux-x64 --no-bytecode --public-packages \"*\" --public --output ../dist/BetterLanTalk-linux-x64",
     "test": "node --test test/*.test.cjs",
     "test:browser": "node test/browser.cjs",

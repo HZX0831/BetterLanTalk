@@ -1,4 +1,4 @@
-name: Build release executables
+name: Test and publish release
 
 on:
   push:
@@ -23,11 +23,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            script: bundle
-            asset: BetterLanTalk-win-x64.exe
+            bundle: false
           - os: ubuntu-latest
-            script: bundle:linux
-            asset: BetterLanTalk-linux-x64
+            bundle: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     outputs:
@@ -54,24 +52,23 @@ jobs:
           cache-dependency-path: server/package-lock.json
       - run: npm --prefix server ci --no-audit --no-fund
       - run: npm --prefix server test
-      - name: Build the executable
-        shell: bash
-        env:
-          BUILD_SCRIPT: ${{ matrix.script }}
-        run: npm --prefix server run "$BUILD_SCRIPT"
-      - run: npm --prefix server run test:bundle
-      - name: Hash the executable
+      - name: Build the Linux executable
+        if: matrix.bundle
+        run: npm --prefix server run bundle:linux
+      - if: matrix.bundle
+        run: npm --prefix server run test:bundle
+      - name: Hash the Linux executable
+        if: matrix.bundle
         shell: bash
         working-directory: dist
-        env:
-          ASSET: ${{ matrix.asset }}
-        run: sha256sum "$ASSET" > "$ASSET.sha256"
-      - uses: actions/upload-artifact@v4
+        run: sha256sum BetterLanTalk-linux-x64 > BetterLanTalk-linux-x64.sha256
+      - if: matrix.bundle
+        uses: actions/upload-artifact@v4
         with:
           name: executable-${{ runner.os }}
           path: |
-            dist/${{ matrix.asset }}
-            dist/${{ matrix.asset }}.sha256
+            dist/BetterLanTalk-linux-x64
+            dist/BetterLanTalk-linux-x64.sha256
           if-no-files-found: error
 
   publish:
@@ -96,21 +93,16 @@ jobs:
         run: |
           cat ./*.sha256 > SHA256SUMS.txt
           sha256sum -c SHA256SUMS.txt
-          gh release upload "$RELEASE_TAG" BetterLanTalk-win-x64.exe BetterLanTalk-linux-x64 SHA256SUMS.txt --repo "$RELEASE_REPO" --clobber
-      - name: Record native Windows validation and publish
+          gh release upload "$RELEASE_TAG" BetterLanTalk-linux-x64 SHA256SUMS.txt --repo "$RELEASE_REPO" --clobber
+      - name: Remove the retired Windows executable and publish
         shell: bash
         run: |
-          gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json body --jq '.body' > release-notes.md
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('release-notes.md')
-          p.write_text(p.read_text().replace(
-              'Windows exe 已完成交叉构建，尚未进行 Windows 实机验证。',
-              'Windows x64 和 Linux x64 独立程序均在 GitHub Actions 原生运行环境通过启动、资源、聊天、上传下载和重启持久化检查。'
-          ))
-          PY
+          has_exe="$(gh release view "$RELEASE_TAG" --repo "$RELEASE_REPO" --json assets --jq 'any(.assets[]; .name == "BetterLanTalk-win-x64.exe")')"
+          if [[ "$has_exe" == true ]]; then
+            gh release delete-asset "$RELEASE_TAG" BetterLanTalk-win-x64.exe --repo "$RELEASE_REPO" --yes
+          fi
           if [[ "$RELEASE_TAG" == *-* ]]; then
-            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --notes-file release-notes.md --draft=false --prerelease --latest=false
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --draft=false --prerelease --latest=false
           else
-            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --notes-file release-notes.md --draft=false --prerelease=false --latest
+            gh release edit "$RELEASE_TAG" --repo "$RELEASE_REPO" --draft=false --prerelease=false --latest
           fi

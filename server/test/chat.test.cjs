@@ -50,7 +50,7 @@ async function smoke() {
   const workdir = path.join(root, 'server');
   fs.mkdirSync(workdir);
   fs.copyFileSync(path.join(repo, 'server/server.js'), path.join(workdir, 'server.js'));
-  for (const file of ['markdown.js', 'social.js', 'jiyu.js', 'community.js', 'protected-store.js', 'package.json']) fs.copyFileSync(path.join(repo, 'server', file), path.join(workdir, file));
+  for (const file of ['markdown.js', 'social.js', 'jiyu.js', 'community.js', 'config-store.js', 'package.json']) fs.copyFileSync(path.join(repo, 'server', file), path.join(workdir, file));
   fs.symlinkSync(path.join(repo, 'server/node_modules'), path.join(workdir, 'node_modules'), 'dir');
   fs.symlinkSync(path.join(repo, 'client'), path.join(root, 'client'), 'dir');
   const probe = net.createServer();
@@ -61,7 +61,7 @@ async function smoke() {
   const base = 'http://127.0.0.1:' + port;
   const child = spawn(process.execPath, ['server.js'], {
     cwd: workdir,
-    env: { ...process.env, PORT: String(port), LANTALK_SECURITY_DIR: path.join(root, 'private'), LANTALK_DATA_DIR: workdir, LANTALK_OPEN_BROWSER: '0', LANTALK_NO_BROWSER: '1' },
+    env: { ...process.env, PORT: String(port), LANTALK_DATA_DIR: workdir, LANTALK_OPEN_BROWSER: '0', LANTALK_NO_BROWSER: '1' },
     stdio: 'ignore'
   });
   let childError;
