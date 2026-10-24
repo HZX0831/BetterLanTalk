@@ -69,3 +69,18 @@ test('malformed video parameters fall back to escaped text without crashing', ()
     assert.ok(!doc.querySelector('script'));
     assert.ok(doc.body.textContent.includes('<script>'));
 });
+
+test('QQ images and visible mentions render in plain text while code, math and links remain literal', () => {
+    const id = '8132b05c-c665-45df-8da4-50888cad3b71';
+    const entity = { type: 'user', userId: id, label: 'alice', start: 0, end: 6 };
+    const doc = new JSDOM(render('@alice :qq[14]:', 'entities', [entity])).window.document;
+    assert.equal(doc.querySelector('.mention').textContent, '@alice');
+    assert.equal(doc.querySelector('.mention').dataset.mentionId, id);
+    assert.equal(doc.querySelector('.qq-emoji').getAttribute('src'), '/assets/qq/14.png');
+    for (const source of ['`@alice :qq[14]:`', '$@alice$', '[@alice](https://example.com)']) {
+        const position = source.indexOf('@alice');
+        const html = render(source, 'literal', [{ ...entity, start: position, end: position + 6 }]);
+        assert.ok(!html.includes('data-mention-id=')); assert.ok(!html.includes('class="qq-emoji"')); assert.ok(!html.includes('BLTM'));
+    }
+    assert.ok(!render('@alice without entities').includes('data-mention-id='));
+});

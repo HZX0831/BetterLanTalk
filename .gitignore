@@ -40,3 +40,20 @@ server/files.json
 
 # 房间定义与邀请名单
 server/rooms.json
+
+# 好友、设备绑定与持久化聊天记录
+server/social.json
+server/messages.json
+server/*.json.tmp
+server/*.pre-social.bak
+server/*.pre-ip.bak
+
+# 群组设置、Bot 更新队列与持久头像
+server/community.json
+server/avatars/
+
+.lantalk-bot-cursor.json
+
+# 可信存储标记与原子写入临时副本
+server/.security-initialized
+server/*.json.*.tmp

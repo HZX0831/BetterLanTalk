@@ -6,6 +6,9 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { isIPv4 } = require('net');
+const { createJiyuNotifier } = require('./jiyu');
+const notifyJiyu = createJiyuNotifier();
 const { exec } = require('child_process');
 
 // 预览与消息共用新版 Luogu Markdown 解析器。
@@ -53,47 +56,76 @@ const app = express();
 const server = http.createServer(app);
 
 // ============ 配置与账号存储 ============
-const CONFIG_FILE = path.join(__dirname, 'config.json');
-const USERS_FILE = path.join(__dirname, 'users.json');
-const FILES_FILE = path.join(__dirname, 'files.json');
-const ROOMS_FILE = path.join(__dirname, 'rooms.json');
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
+// Bundled resources are read-only; keep portable data next to the executable.
+const DATA_DIR = process.env.LANTALK_DATA_DIR
+    ? path.resolve(process.env.LANTALK_DATA_DIR)
+    : process.pkg ? path.join(path.dirname(process.execPath), 'data') : __dirname;
+fs.mkdirSync(DATA_DIR, { recursive: true });
+const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
+const USERS_FILE = path.join(DATA_DIR, 'users.json');
+const FILES_FILE = path.join(DATA_DIR, 'files.json');
+const ROOMS_FILE = path.join(DATA_DIR, 'rooms.json');
+const SOCIAL_FILE = path.join(DATA_DIR, 'social.json');
+const MESSAGES_FILE = path.join(DATA_DIR, 'messages.json');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 
 function loadJSON(file, def) {
-    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { return def; }
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (error) {
+        if (error.code === 'ENOENT') return def;
+        throw new Error('无法读取持久化数据 ' + path.basename(file) + ': ' + error.message);
+    }
 }
 function saveJSON(file, data) {
-    fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(file + '.tmp', file);
 }
 
-let config = loadJSON(CONFIG_FILE, null) || {};
-if (!config.port || isNaN(config.port)) config.port = 3001;
-config.port = Number(config.port);
-if (!config.maxFileMB || isNaN(config.maxFileMB)) config.maxFileMB = 5120;   // 单文件上限 5GB
-if (!config.maxUploadsMB || isNaN(config.maxUploadsMB)) config.maxUploadsMB = 20480; // 上传目录总上限 20GB
-config.maxFileMB = Number(config.maxFileMB);
-config.maxUploadsMB = Number(config.maxUploadsMB);
-if (typeof config.serverIP !== 'string') config.serverIP = '';   // 手动指定的对外IP，留空则自动检测
-saveJSON(CONFIG_FILE, {
-    port: config.port,
-    maxFileMB: config.maxFileMB,
-    maxUploadsMB: config.maxUploadsMB,
-    serverIP: config.serverIP
-});
+// Configuration and accounts are ordinary JSON, loaded on startup and saved atomically.
+const { readConfig, writeConfig } = require('./config-store');
+const config = readConfig(CONFIG_FILE);
+let userStore = loadJSON(USERS_FILE, null);
+if (!userStore) {
+    const existingData = [USERS_FILE, ROOMS_FILE, MESSAGES_FILE, SOCIAL_FILE, FILES_FILE, path.join(DATA_DIR, 'community.json')].some(file => fs.existsSync(file));
+    const existingMedia = [UPLOADS_DIR, path.join(DATA_DIR, 'avatars')].some(directory => fs.existsSync(directory) && fs.readdirSync(directory).length);
+    if (existingData || existingMedia) throw new Error('现有部署缺少有效 users.json，请恢复账号数据');
+    const salt = crypto.randomBytes(16).toString('hex');
+    userStore = { users: [{ id: crypto.randomUUID(), username: 'admin', salt,
+        passwordHash: hashPassword('=Aa1357924680', salt), role: 'superadmin', registeredIp: '', boundIp: '', createdAt: Date.now() }], tokens: {} };
+}
+if (!Array.isArray(userStore.users) || userStore.users.filter(user => user?.role === 'superadmin').length !== 1) throw new Error('users.json 必须恰好包含一名超级管理员');
+if (userStore.users.some(user => !user?.id)) {
+    for (const file of [USERS_FILE, ROOMS_FILE]) if (fs.existsSync(file) && !fs.existsSync(file + '.pre-social.bak')) fs.copyFileSync(file, file + '.pre-social.bak');
+}
+if (userStore.users.some(user => typeof user.boundIp !== 'string') && fs.existsSync(USERS_FILE) && !fs.existsSync(USERS_FILE + '.pre-ip.bak')) fs.copyFileSync(USERS_FILE, USERS_FILE + '.pre-ip.bak');
+const accountIds = new Set(), accountNames = new Set();
+for (const account of userStore.users) {
+    if (!account.id) account.id = crypto.randomUUID();
+    if (!['user', 'admin', 'superadmin'].includes(account.role) || typeof account.username !== 'string' || !account.username || accountIds.has(account.id) || accountNames.has(account.username) ||
+        (account.kind === 'bot' ? account.role !== 'user' || typeof account.botTokenHash !== 'string' : typeof account.salt !== 'string' || typeof account.passwordHash !== 'string')) throw new Error('users.json 账号身份或角色无效');
+    accountIds.add(account.id); accountNames.add(account.username);
+    if (typeof account.boundIp !== 'string') account.boundIp = account.role === 'superadmin' ? '' : normalizeIp(account.registeredIp);
+    account.boundIp = normalizeIp(account.boundIp);
+}
+userStore.tokens ||= {};
+if (typeof userStore.tokens !== 'object' || Array.isArray(userStore.tokens)) throw new Error('users.json 会话数据无效');
+function saveUsers() { saveJSON(USERS_FILE, userStore); }
+// A configured superadmin IP overrides the saved binding only on startup.
+if (config.superadminIP) {
+    const owner = userStore.users.find(account => account.role === 'superadmin');
+    if (userStore.users.some(account => account.id !== owner.id && account.boundIp === config.superadminIP)) throw new Error('config.json 中 superadminIP 已被其他账号绑定，请先解除冲突');
+    if (owner.boundIp !== config.superadminIP) {
+        owner.boundIp = config.superadminIP;
+        for (const token of Object.keys(userStore.tokens)) if (userStore.tokens[token].username === owner.username) delete userStore.tokens[token];
+        saveUsers();
+    }
+}
+writeConfig(CONFIG_FILE, config);
+saveUsers();
 
-// 确保上传目录存在
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-
-// 文件元数据：{ files: [{ storedName, name, size, mimeType, uploader, roomId, createdAt, expired }] }
 let fileStore = loadJSON(FILES_FILE, null) || { files: [] };
 if (!Array.isArray(fileStore.files)) fileStore.files = [];
 function saveFiles() { saveJSON(FILES_FILE, fileStore); }
-
-let userStore = loadJSON(USERS_FILE, null) || { users: [], tokens: {} };
-if (!Array.isArray(userStore.users)) userStore.users = [];
-if (typeof userStore.tokens !== 'object' || !userStore.tokens) userStore.tokens = {};
-
-function saveUsers() { saveJSON(USERS_FILE, userStore); }
 
 function hashPassword(password, salt) {
     return crypto.scryptSync(password, salt, 64).toString('hex');
@@ -102,11 +134,13 @@ function hashPassword(password, salt) {
 function addUser(username, password, role, registeredIp) {
     const salt = crypto.randomBytes(16).toString('hex');
     const user = {
+        id: crypto.randomUUID(),
         username,
         salt,
         passwordHash: hashPassword(password, salt),
         role,
         registeredIp: registeredIp || '',
+        boundIp: role === 'superadmin' ? '' : registeredIp || '',
         createdAt: Date.now()
     };
     userStore.users.push(user);
@@ -121,7 +155,7 @@ function createToken(username, role) {
     return token;
 }
 
-function getUserByToken(token) {
+function getUserByToken(token, ip) {
     if (!token) return null;
     const t = userStore.tokens[token];
     if (!t) return null;
@@ -131,12 +165,32 @@ function getUserByToken(token) {
         return null;
     }
     const account = userStore.users.find(u => u.username === t.username);
-    if (!account) return null;
-    return { username: account.username, role: account.role };
+    if (!account || (ip !== undefined && accountIpError(account, ip))) return null;
+    if (account.kind === 'bot') return null;
+    return { id: account.id, username: account.username, role: account.role, kind: account.kind || 'human', boundIp: account.boundIp, avatar: account.avatar || '' };
 }
 
+function normalizeIp(ip) {
+    return String(ip || '').replace(/^::ffff:/i, '');
+}
 function clientIpOf(req) {
-    return (req.socket && req.socket.remoteAddress || '').replace('::ffff:', '');
+    // Direct peer only: an untrusted forwarding header cannot change account identity.
+    return normalizeIp(req.socket?.remoteAddress);
+}
+function accountIpError(account, ip) {
+    ip = normalizeIp(ip);
+    if (!account.boundIp) return '账号尚未关联设备 IP，请重新登录';
+    if (account.boundIp !== ip) return '该账号只能从已关联的设备 IP 登录';
+    if (userStore.users.some(other => other.id !== account.id && other.boundIp === ip)) return '此设备 IP 已关联其他账号';
+    return null;
+}
+function bindLoginIp(account, ip) {
+    ip = normalizeIp(ip);
+    if (!ip) return '无法识别设备 IP';
+    if (userStore.users.some(other => other.id !== account.id && other.boundIp === ip)) return '此设备 IP 已关联其他账号';
+    if (account.boundIp && account.boundIp !== ip) return '该账号只能从已关联的设备 IP 登录';
+    if (!account.boundIp) { account.boundIp = ip; saveUsers(); }
+    return null;
 }
 
 function requestToken(req) {
@@ -149,9 +203,12 @@ function sessionCookie(req, res, token) {
     res.cookie('lantalk_session', token, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: 7 * 24 * 3600 * 1000 });
 }
 function authMiddleware(req, res, next) {
+    if (req.botInternal && req.auth?.kind === 'bot') return next();
     const token = requestToken(req);
     const auth = getUserByToken(token);
     if (!auth) return res.status(401).json({ error: '未登录或登录已过期' });
+    const ipError = accountIpError(auth, clientIpOf(req));
+    if (ipError) return res.status(403).json({ error: ipError });
     req.auth = auth;
     req.authToken = token;
     next();
@@ -169,15 +226,12 @@ function superadminMiddleware(req, res, next) {
         next();
     });
 }
-// Preserve existing accounts and passwords; promote the initial administrator once.
-if (!userStore.users.length) {
-    addUser('admin', 'admin123', 'superadmin', '');
-    console.log('已创建初始超级管理员 admin / admin123，请登录后修改密码');
-} else if (!userStore.users.some(u => u.role === 'superadmin')) {
-    const initial = userStore.users.find(u => u.role === 'admin') || userStore.users[0];
-    initial.role = 'superadmin';
-}
-saveUsers();
+const social = loadJSON(SOCIAL_FILE, { friends: [], requests: [] });
+for (const key of ['friends', 'requests']) if (!Array.isArray(social[key])) social[key] = [];
+const accountById = id => userStore.users.find(account => account.id === id);
+const accountId = name => userStore.users.find(account => account.username === name)?.id;
+const areFriends = (a, b) => social.friends.some(pair => pair.includes(a) && pair.includes(b));
+const saveSocial = () => saveJSON(SOCIAL_FILE, social);
 
 const io = new Server(server, {  // ← io 在这里初始化
     cors: {
@@ -186,9 +240,12 @@ const io = new Server(server, {  // ← io 在这里初始化
     }
 });
 
+let community;
 const users = new Map();
 const rooms = new Map();
-const messages = new Map();
+const storedMessages = loadJSON(MESSAGES_FILE, { rooms: {} });
+const messages = new Map(Object.entries(storedMessages.rooms || {}).filter(([, value]) => Array.isArray(value)));
+function saveMessages() { saveJSON(MESSAGES_FILE, { rooms: Object.fromEntries(messages) }); }
 const mutedIPs = new Set();
 // 对外IP：优先使用配置中手动指定的，否则自动检测
 let localIP = (config.serverIP && config.serverIP.trim()) || getLocalIP();
@@ -275,11 +332,12 @@ function cleanupUploads() {
                     timestamp: Date.now(),
                     room: f.roomId
                 };
-                messages.get(f.roomId)?.push(msg);
-                io.to(roomChannel(f.roomId)).emit('message', msg);
+                if (community) community.publish(rooms.get(f.roomId), msg, { notify: false });
+                else { messages.get(f.roomId)?.push(msg); io.to(roomChannel(f.roomId)).emit('message', msg); }
                 io.to(roomChannel(f.roomId)).emit('file_expired', { storedName: f.storedName });
             }
         });
+        saveMessages();
     }
     return removed;
 }
@@ -289,27 +347,40 @@ cleanupUploads();
 
 // Room membership is independent of which room the user is currently viewing.
 function saveRooms() {
-    saveJSON(ROOMS_FILE, { rooms: Array.from(rooms.values()).map(({ users, ...room }) => room) });
+    saveJSON(ROOMS_FILE, { membershipVersion: 3, rooms: Array.from(rooms.values()).map(({ users, ...room }) => room) });
 }
 function canAccessRoom(account, room) {
-    return !!account && !!room && (room.isPublic || room.members.includes(account.username));
+    return !!account && !!room && !room.archived && room.memberIds.includes(account.id);
 }
 function canManageRoom(account, room) {
-    return isAdmin(account) && !!room && (account.role === 'superadmin' || room.createdBy === account.username);
+    if (!canAccessRoom(account, room) || room.kind === 'direct') return false;
+    return room.id === 'default' ? isAdmin(account) : room.ownerId === account.id || (room.adminIds || []).includes(account.id);
+}
+function canSendRoom(account, room) {
+    return canAccessRoom(account, room) && (room.kind !== 'direct' || areFriends(...room.memberIds));
 }
 function roomInfo(room, account) {
-    return { id: room.id, name: room.name, isPublic: room.isPublic, createdBy: room.createdBy,
-        created: room.created, userCount: new Set(room.users.map(u => u.username)).size,
+    const other = room.kind === 'direct' ? accountById(room.memberIds.find(id => id !== account?.id)) : null;
+    const last = canAccessRoom(account, room) ? (community ? community.history(account, room) : messages.get(room.id) || []).at(-1) : null;
+    return { id: room.id, name: room.kind === 'direct' ? other?.username || '已删除的用户' : room.name,
+        kind: room.kind || 'group', isPublic: room.isPublic, createdBy: room.createdBy,
+        avatar: room.kind === 'direct' ? other?.avatar || '' : room.avatar || '', peerKind: other?.kind || 'human',
+        ownerId: room.ownerId || '', adminIds: room.adminIds || [], announcement: canAccessRoom(account, room) ? room.announcement || '' : '',
+        settings: community ? community.preferences(account || {}, room.id) : {}, groupRole: community ? community.role(account, room) : 'member',
+        created: room.created, userCount: new Set(room.users.map(u => u.id)).size,
+        memberCount: room.memberIds.length, canSend: canSendRoom(account, room), peerId: other?.id,
+        lastMessage: last ? { timestamp: last.timestamp, preview: last.type === 'file' ? (last.isImage ? '[图片]' : '[文件]') : String(last.content || '').slice(0, 80) } : null,
         canManage: canManageRoom(account, room),
-        ...(canManageRoom(account, room) ? { members: room.members } : {}) };
+        ...(canManageRoom(account, room) ? { members: room.memberIds.map(id => accountById(id)?.username).filter(Boolean) } : {}) };
 }
 function visibleRooms(account, managing = false) {
-    return Array.from(rooms.values()).filter(room => managing ? canManageRoom(account, room) : canAccessRoom(account, room)).map(room => roomInfo(room, account));
+    return Array.from(rooms.values()).filter(room => managing ? !room.archived && room.kind !== 'direct' : canAccessRoom(account, room)).map(room => roomInfo(room, account));
 }
 function socketUser(socket) {
     const user = users.get(socket.id);
-    const account = getUserByToken(socket.data.token);
+    const account = getUserByToken(socket.data.token, socket.handshake.address);
     if (!user || !account) return null;
+    user.id = account.id;
     user.username = account.username;
     user.role = account.role;
     return user;
@@ -323,7 +394,13 @@ function syncRoomSubscriptions() {
             if (canAccessRoom(user, room)) {
                 socket.join(roomChannel(room.id));
                 room.users.push(user);
-            } else socket.leave(roomChannel(room.id));
+            } else {
+                socket.leave(roomChannel(room.id));
+                if (user.currentRoom === room.id) {
+                    socket.emit('kicked_from_room', { roomId: room.id, reason: '已失去此会话的成员权限' });
+                    switchRoom(socket, user, rooms.get('default'));
+                }
+            }
         }
     }
     for (const room of rooms.values()) updateUserList(room.id);
@@ -331,48 +408,53 @@ function syncRoomSubscriptions() {
 }
 function createRoom(roomId, roomName, isPublic = true, createdBy = '') {
     const room = { id: roomId, name: roomName || roomId, isPublic, createdBy,
-        members: isPublic ? [] : [createdBy], users: [], created: Date.now() };
+        members: [createdBy].filter(Boolean), memberIds: createdBy ? [accountId(createdBy)] : [], kind: 'group', users: [], created: Date.now() };
     rooms.set(roomId, room);
-    messages.set(roomId, []);
+    if (!messages.has(roomId)) messages.set(roomId, []);
     saveRooms();
     syncRoomSubscriptions();
     return room;
 }
-function roomCreationError(account, data) {
-    if (!isAdmin(account)) return '需要管理员权限';
-    if (!data || typeof data !== 'object' || Array.isArray(data)) return '房间参数无效';
-    const { roomId, roomName, isPublic = true } = data;
-    if (typeof roomId !== 'string' || !/^[A-Za-z0-9_-]{2,20}$/.test(roomId)) return '房间ID应为2-20位字母、数字、下划线或连字符';
-    if (roomName !== undefined && (typeof roomName !== 'string' || roomName.length > 50)) return '房间名称最多50个字符';
-    if (typeof isPublic !== 'boolean') return '请选择公开或私有房间';
-    if (rooms.has(roomId)) return '房间已存在';
-    return null;
-}
 function broadcastRoomList() {
     for (const socket of io.sockets.sockets.values()) {
-        const account = getUserByToken(socket.data.token);
+        const account = getUserByToken(socket.data.token, socket.handshake.address);
         socket.emit('room_list', visibleRooms(account));
     }
 }
 function updateUserList(roomId) {
     const room = rooms.get(roomId);
     if (!room) return;
-    const unique = new Map(room.users.map(user => [user.username, user]));
-    io.to(roomChannel(roomId)).emit('user_list', Array.from(unique.values()).map(user => ({
-        id: user.id, username: user.username, joinTime: user.joinTime, ip: user.ip, isMuted: user.isMuted
-    })), roomId);
+    const list = room.memberIds.map(id => accountById(id)).filter(Boolean).map(account => ({
+        ...(community ? community.profile(account) : { id: account.id, username: account.username }),
+        nickname: community?.preferences(account, room.id).nickname || '', groupRole: community?.role(account, room) || 'member', online: room.users.some(user => user.id === account.id)
+    }));
+    io.to(roomChannel(roomId)).emit('user_list', list, roomId);
 }
 function switchRoom(socket, user, room) {
     user.currentRoom = room.id;
-    socket.emit('room_joined', { roomId: room.id, roomName: room.name, userCount: new Set(room.users.map(member => member.username)).size });
-    socket.emit('message_history', (messages.get(room.id) || []).slice(-50), room.id);
+    socket.emit('room_joined', { roomId: room.id, roomName: roomInfo(room, user).name, canSend: canSendRoom(user, room), kind: room.kind, userCount: new Set(room.users.map(member => member.username)).size });
+    socket.emit('message_history', (community ? community.history(user, room) : messages.get(room.id) || []).slice(-50), room.id);
     updateUserList(room.id);
 }
 
 // 中间件
 app.use(cors());
 app.use(express.json());
-app.use('/client', express.static(path.join(__dirname, '../client')));
+const clientDir = path.join(__dirname, '../client');
+app.use('/client', (req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    let resource;
+    try { resource = decodeURIComponent(req.path); } catch { return res.sendStatus(400); }
+    if (resource.includes('%') || resource.includes('\\') || resource.includes('\0') || resource.split('/').some(part => part === '.' || part === '..')) return res.sendStatus(400);
+    const publicFiles = ['/index.html', '/login.js', '/login.css', '/context-menu.js'];
+    if (publicFiles.includes(resource)) return next();
+    const gate = /^\/admin(?:\.|\/)/i.test(resource) ? adminMiddleware : authMiddleware;
+    const protectedFiles = ['/chat.html', '/chat.js', '/styles.css', '/composer.js', '/notifications.js', '/markdown.js',
+        '/admin.html', '/admin.js', '/admin.css', '/community-ui.js', '/community.css', '/icons.js', '/message-policy.js', '/emoji-data.js', '/vendor/luogu-markdown-editor/luogu-parser.js'];
+    gate(req, res, () => protectedFiles.includes(resource) ? next() : res.sendStatus(404));
+}, express.static(clientDir, { index: false, dotfiles: 'deny' }));
+app.use('/assets', authMiddleware, (req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+app.use('/assets/qq', express.static(path.join(clientDir, 'vendor/qq')));
 app.use('/assets/katex', express.static(path.join(__dirname, 'node_modules/katex/dist')));
 app.use('/assets/prism', express.static(path.join(__dirname, 'node_modules/prismjs')));
 app.get('/assets/purify.js', (req, res) => res.sendFile(path.join(__dirname, 'node_modules/dompurify/dist/purify.min.js')));
@@ -384,35 +466,45 @@ app.get('/uploads/:storedName', authMiddleware, (req, res) => {
     res.sendFile(path.join(UPLOADS_DIR, file.storedName));
 });
 
-// Restore definitions and invitations without restoring live connections.
+// Migrate legacy public groups once, keeping access for existing accounts.
 const storedRooms = loadJSON(ROOMS_FILE, { rooms: [] });
 for (const saved of (Array.isArray(storedRooms.rooms) ? storedRooms.rooms : [])) {
     if (typeof saved.id !== 'string') continue;
-    rooms.set(saved.id, { ...saved, isPublic: saved.isPublic !== false,
-        members: Array.isArray(saved.members) ? saved.members : [], users: [] });
-    messages.set(saved.id, []);
+    const memberIds = Array.isArray(saved.memberIds) ? saved.memberIds :
+        saved.isPublic !== false ? userStore.users.map(user => user.id) : (saved.members || []).map(accountId).filter(Boolean);
+    rooms.set(saved.id, { ...saved, kind: saved.kind || 'group', isPublic: saved.isPublic !== false,
+        archived: saved.archived || (storedRooms.membershipVersion !== 3 && saved.id !== 'default' && saved.kind !== 'direct'),
+        members: Array.isArray(saved.members) ? saved.members : [], memberIds, users: [] });
+    if (!messages.has(saved.id)) messages.set(saved.id, []);
 }
-if (!rooms.has('default')) createRoom('default', '公共聊天室');
+if (!rooms.has('default')) createRoom('default', '默认聊天室');
 rooms.get('default').isPublic = true;
+rooms.get('default').memberIds = userStore.users.map(account => account.id);
 saveRooms();
+saveMessages();
+community = require('./community')({ app, authMiddleware, adminMiddleware, userStore, saveUsers, social, saveSocial,
+    rooms, messages, saveRooms, saveMessages, accountById, areFriends, canAccessRoom, canSendRoom, canManageRoom,
+    roomInfo, syncRoomSubscriptions, io, users, roomChannel, superadminIP: () => config.superadminIP, DATA_DIR, loadJSON, saveJSON, processMarkdown, fileStore,
+    notifyJiyuRoom, broadcastRoomList, isMuted: account => mutedIPs.has(accountById(account.id)?.boundIp),
+    emojiIds: new Set(require('../client/vendor/qq/manifest.json').map(item => item.id)) });
 
-// API路由
+// Separate pages; protected sources are never part of the login response.
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, '../client/index.html'));
+    res.set('Cache-Control', 'no-store');
+    if (getUserByToken(requestToken(req), clientIpOf(req))) return res.redirect('/chat');
+    res.sendFile(path.join(clientDir, 'index.html'));
 });
-
-app.get('/chat', (req, res) => {
-    res.redirect('/');
+app.get('/chat', authMiddleware, (req, res) => {
+    res.set('Cache-Control', 'no-store'); res.sendFile(path.join(clientDir, 'chat.html'));
 });
-
-app.get('/admin', (req, res) => {
-    res.redirect('/');
+app.get('/admin', adminMiddleware, (req, res) => {
+    res.set('Cache-Control', 'no-store'); res.sendFile(path.join(clientDir, 'admin.html'));
 });
 
 app.get('/api/status', (req, res) => {
     res.json({
         name: '内网聊天室服务器',
-        version: '1.1.1',
+        version: require('./package.json').version,
         status: 'running',
         serverIP: localIP,
         port: PORT,
@@ -430,6 +522,8 @@ app.get('/api/health', (req, res) => {
         timestamp: Date.now()
     });
 });
+
+app.get('/api/my-notification-devices', authMiddleware, (req, res) => res.json({ enabled: config.jiyuEnabled, ips: req.auth.boundIp ? [req.auth.boundIp] : [] }));
 
 app.get('/api/users', adminMiddleware, (req, res) => {
     const userList = Array.from(users.values()).map(user => ({
@@ -471,20 +565,24 @@ app.post('/api/unmute-ip', adminMiddleware, (req, res) => {
 // ============ 账号相关 API ============
 app.post('/api/register', (req, res) => {
     const { username, password } = req.body;
-    if (!username || username.length < 2 || username.length > 20) {
+    if (typeof username !== 'string' || username.length < 2 || username.length > 20) {
         return res.status(400).json({ error: '用户名长度应为2-20个字符' });
     }
-    if (!password || password.length < 6) {
+    if (typeof password !== 'string' || password.length < 6) {
         return res.status(400).json({ error: '密码长度至少6位' });
     }
     if (userStore.users.some(u => u.username === username)) {
         return res.status(400).json({ error: '用户名已存在' });
     }
     const ip = clientIpOf(req);
-    if (ip && userStore.users.some(u => u.registeredIp && u.registeredIp === ip)) {
-        return res.status(403).json({ error: '该IP已注册过账号，每个IP仅限注册一个用户' });
+    if (ip && userStore.users.some(u => u.boundIp === ip)) {
+        return res.status(403).json({ error: '此设备 IP 已关联其他账号，每个 IP 只能使用一个账号' });
     }
-    addUser(username, password, 'user', ip);
+    const account = addUser(username, password, 'user', ip);
+    rooms.get('default').memberIds.push(account.id);
+    community.autoRequests();
+    saveRooms();
+    syncRoomSubscriptions();
     const token = createToken(username, 'user');
     console.log(`新用户注册: ${username} (IP: ${ip})`);
     sessionCookie(req, res, token);
@@ -497,9 +595,11 @@ app.post('/api/login', (req, res) => {
         return res.status(400).json({ error: '用户名和密码不能为空' });
     }
     const user = userStore.users.find(u => u.username === username);
-    if (!user || user.passwordHash !== hashPassword(password, user.salt)) {
+    if (!user || user.kind === 'bot' || user.passwordHash !== hashPassword(password, user.salt)) {
         return res.status(401).json({ error: '用户名或密码错误' });
     }
+    const ipError = bindLoginIp(user, clientIpOf(req));
+    if (ipError) return res.status(403).json({ error: ipError });
     const token = createToken(user.username, user.role);
     console.log(`用户登录: ${user.username} (${user.role})`);
     sessionCookie(req, res, token);
@@ -509,7 +609,7 @@ app.post('/api/login', (req, res) => {
 app.get('/api/me', authMiddleware, (req, res) => {
     sessionCookie(req, res, req.authToken);
     const user = userStore.users.find(u => u.username === req.auth.username);
-    res.json({ username: req.auth.username, role: user ? user.role : req.auth.role });
+    res.json({ ...community.profile(user), role: user.role, boundIp: user.boundIp, token: req.authToken, preferences: community.appearance(user) });
 });
 
 app.post('/api/logout', authMiddleware, (req, res) => {
@@ -525,9 +625,11 @@ app.post('/api/logout', authMiddleware, (req, res) => {
 // 账号管理（仅管理员）
 app.get('/api/accounts', adminMiddleware, (req, res) => {
     res.json(userStore.users.map(u => ({
+        id: u.id,
         username: u.username,
-        role: u.role,
+        role: u.role, kind: u.kind || 'human', avatar: u.avatar || '', disabled: !!u.disabled,
         registeredIp: u.registeredIp,
+        boundIp: u.boundIp,
         createdAt: u.createdAt
     })));
 });
@@ -539,7 +641,7 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
 
     const { newUsername, newPassword } = req.body;
     if (newUsername !== undefined) {
-        if (newUsername.length < 2 || newUsername.length > 20) {
+        if (typeof newUsername !== 'string' || newUsername.length < 2 || newUsername.length > 20) {
             return res.status(400).json({ error: '用户名长度应为2-20个字符' });
         }
         if (userStore.users.some(u => u.username === newUsername)) {
@@ -558,7 +660,7 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
         saveFiles();
     }
     if (newPassword !== undefined && newPassword !== '') {
-        if (newPassword.length < 6) {
+        if (typeof newPassword !== 'string' || newPassword.length < 6) {
             return res.status(400).json({ error: '密码长度至少6位' });
         }
         user.salt = crypto.randomBytes(16).toString('hex');
@@ -566,7 +668,8 @@ app.put('/api/users/:username', adminMiddleware, (req, res) => {
     }
     saveUsers();
     syncRoomSubscriptions();
-    for (const socket of io.sockets.sockets.values()) if (getUserByToken(socket.data.token)?.username === user.username) socket.emit('account_changed', { username: user.username, role: user.role });
+    socialChanged();
+    for (const socket of io.sockets.sockets.values()) if (getUserByToken(socket.data.token)?.username === user.username) socket.emit('account_changed', { id: user.id, username: user.username, role: user.role });
     console.log(`管理员修改账号: ${req.params.username} -> ${user.username}`);
     res.json({ success: true, message: '修改成功', user: { username: user.username, role: user.role } });
 });
@@ -578,6 +681,8 @@ app.delete('/api/users/:username', adminMiddleware, (req, res) => {
     if (user.username === req.auth.username) {
         return res.status(400).json({ error: '不能删除当前登录的账号' });
     }
+    if (!community.canDeleteAccount(user)) return res.status(409).json({ error: '账号仍是群主，请先转让或解散群组' });
+    if (user.kind === 'bot') return res.status(400).json({ error: '请使用 Bot 管理接口删除' });
     userStore.users = userStore.users.filter(u => u.username !== user.username);
     Object.keys(userStore.tokens).forEach(t => {
         if (userStore.tokens[t].username === user.username) delete userStore.tokens[t];
@@ -586,10 +691,14 @@ app.delete('/api/users/:username', adminMiddleware, (req, res) => {
     for (const socket of io.sockets.sockets.values()) if (!getUserByToken(socket.data.token)) socket.disconnect(true);
     for (const room of rooms.values()) {
         room.members = room.members.filter(name => name !== user.username);
+        room.memberIds = room.memberIds.filter(id => id !== user.id);
         if (room.createdBy === user.username) room.createdBy = '';
     }
     saveRooms();
     syncRoomSubscriptions();
+    social.friends = social.friends.filter(pair => !pair.includes(user.id));
+    social.requests = social.requests.filter(request => request.from !== user.id && request.to !== user.id);
+    saveSocial(); socialChanged();
     console.log(`管理员删除账号: ${user.username}`);
     res.json({ success: true, message: `用户 ${user.username} 已删除` });
 });
@@ -597,12 +706,13 @@ app.delete('/api/users/:username', adminMiddleware, (req, res) => {
 app.put('/api/users/:username/role', superadminMiddleware, (req, res) => {
     const account = userStore.users.find(user => user.username === req.params.username);
     if (!account) return res.status(404).json({ error: '用户不存在' });
+    if (account.kind === 'bot') return res.status(403).json({ error: 'Bot 不能成为聊天室管理员' });
     if (account.role === 'superadmin') return res.status(403).json({ error: '不能更改超级管理员身份' });
     if (!['admin', 'user'].includes(req.body.role)) return res.status(400).json({ error: '角色必须为管理员或普通用户' });
     account.role = req.body.role;
     saveUsers();
     for (const socket of io.sockets.sockets.values()) {
-        if (getUserByToken(socket.data.token)?.username === account.username) socket.emit('account_changed', { username: account.username, role: account.role });
+        if (getUserByToken(socket.data.token)?.username === account.username) socket.emit('account_changed', { id: account.id, username: account.username, role: account.role });
     }
     syncRoomSubscriptions();
     res.json({ success: true, username: account.username, role: account.role });
@@ -615,6 +725,8 @@ app.get('/api/config', adminMiddleware, (req, res) => {
         maxFileMB: config.maxFileMB,
         maxUploadsMB: config.maxUploadsMB,
         serverIP: config.serverIP || '',
+        superadminIP: config.superadminIP,
+        jiyuEnabled: config.jiyuEnabled, jiyuPort: config.jiyuPort,
         detectedIP: getLocalIP(),
         localIP
     });
@@ -646,15 +758,19 @@ app.get('/api/files', authMiddleware, (req, res) => {
 });
 
 app.put('/api/config', adminMiddleware, (req, res) => {
-    const { port, maxFileMB, maxUploadsMB, serverIP } = req.body;
+    const { port, maxFileMB, maxUploadsMB, serverIP, jiyuEnabled, jiyuPort } = req.body;
+    if (req.body.superadminIP !== undefined) return res.status(400).json({ error: '请在 config.json 中修改 superadminIP 并重启服务' });
+    if (jiyuEnabled !== undefined && typeof jiyuEnabled !== 'boolean') return res.status(400).json({ error: '极域开关必须为布尔值' });
+    if (jiyuPort !== undefined && (!Number.isInteger(jiyuPort) || jiyuPort < 1 || jiyuPort > 65535)) return res.status(400).json({ error: '极域端口应为1-65535的整数' });
     const updated = [];
+    const nextConfig = { ...config };
 
     if (port !== undefined) {
         const p = Number(port);
-        if (!p || isNaN(p) || p < 1 || p > 65535) {
+        if (!Number.isInteger(p) || p < 1 || p > 65535) {
             return res.status(400).json({ error: '端口号应为1-65535之间的数字' });
         }
-        config.port = p;
+        nextConfig.port = p;
         updated.push(`端口 ${p}（重启生效）`);
     }
     if (serverIP !== undefined) {
@@ -666,45 +782,44 @@ app.put('/api/config', adminMiddleware, (req, res) => {
         if (ip && !isValidIPv4(ip)) {
             return res.status(400).json({ error: '对外IP格式无效，应为如 192.168.1.10，留空表示自动检测' });
         }
-        config.serverIP = ip;
-        localIP = ip || getLocalIP();
-        updated.push(`对外IP ${localIP}`);
+        nextConfig.serverIP = ip;
+
+        updated.push(`对外IP ${ip || getLocalIP()}`);
     }
     if (maxFileMB !== undefined) {
         const m = Number(maxFileMB);
-        if (!m || isNaN(m) || m <= 0) {
+        if (!Number.isFinite(m) || m <= 0) {
             return res.status(400).json({ error: '单文件上限应为正整数(MB)' });
         }
-        config.maxFileMB = m;
+        nextConfig.maxFileMB = m;
         updated.push(`单文件上限 ${m}MB`);
     }
     if (maxUploadsMB !== undefined) {
         const m = Number(maxUploadsMB);
-        if (!m || isNaN(m) || m <= 0) {
+        if (!Number.isFinite(m) || m <= 0) {
             return res.status(400).json({ error: '上传目录总上限应为正整数(MB)' });
         }
-        config.maxUploadsMB = m;
+        nextConfig.maxUploadsMB = m;
         updated.push(`上传目录总上限 ${m}MB`);
     }
-    if (config.maxFileMB > config.maxUploadsMB) {
+    if (nextConfig.maxFileMB > nextConfig.maxUploadsMB) {
         return res.status(400).json({ error: '单文件上限不能大于上传目录总上限' });
     }
 
-    saveJSON(CONFIG_FILE, {
-        port: config.port,
-        maxFileMB: config.maxFileMB,
-        maxUploadsMB: config.maxUploadsMB,
-        serverIP: config.serverIP
-    });
+    if (jiyuEnabled !== undefined) { nextConfig.jiyuEnabled = jiyuEnabled; updated.push('极域通知开关'); }
+    if (jiyuPort !== undefined) { nextConfig.jiyuPort = jiyuPort; updated.push('极域端口'); }
+    writeConfig(CONFIG_FILE, nextConfig);
+    Object.assign(config, nextConfig);
+    localIP = nextConfig.serverIP || getLocalIP();
     // 修改上限后立即按新上限清理一次
     cleanupUploads();
     res.json({
         success: true,
         message: updated.length ? '已更新: ' + updated.join('、') : '无改动',
-        port: config.port,
-        maxFileMB: config.maxFileMB,
-        maxUploadsMB: config.maxUploadsMB,
-        serverIP: config.serverIP,
+        port: nextConfig.port,
+        maxFileMB: nextConfig.maxFileMB,
+        maxUploadsMB: nextConfig.maxUploadsMB,
+        serverIP: nextConfig.serverIP,
         localIP
     });
 });
@@ -722,7 +837,7 @@ app.post('/api/upload', authMiddleware, (req, res) => {
     if (!rooms.has(roomId)) {
         return res.status(400).json({ error: '目标房间不存在' });
     }
-    if (!canAccessRoom(req.auth, rooms.get(roomId))) return res.status(403).json({ error: '无权访问该房间' });
+    if (!canSendRoom(req.auth, rooms.get(roomId))) return res.status(403).json({ error: '无权访问该房间' });
 
     let originalName = 'file';
     try { originalName = decodeURIComponent(String(req.headers['x-filename'] || 'file')); } catch (e) {}
@@ -778,8 +893,9 @@ app.post('/api/upload', authMiddleware, (req, res) => {
             return res.status(400).json({ error: '空文件' });
         }
 
-        const account = getUserByToken(req.authToken);
-        if (!canAccessRoom(account, rooms.get(roomId))) {
+        let account = req.botInternal ? accountById(req.auth.id) : getUserByToken(req.authToken);
+        if (req.botInternal && (account?.disabled || account?.botTokenHash !== req.botHash)) account = null;
+        if (!canSendRoom(account, rooms.get(roomId))) {
             fs.unlink(filePath, () => {});
             return res.status(403).json({ error: '房间访问权限已失效' });
         }
@@ -788,7 +904,7 @@ app.post('/api/upload', authMiddleware, (req, res) => {
             name: safeName,
             size: received,
             mimeType,
-            uploader: account.username,
+            uploader: account.username, uploaderId: account.id,
             roomId,
             createdAt: Date.now(),
             expired: false
@@ -825,108 +941,48 @@ app.post('/api/broadcast', adminMiddleware, (req, res) => {
     const adminMessage = {
         id: generateId(),
         type: 'admin',
-        username: '管理员',
+        username: req.auth.username,
         content: message,
         timestamp: Date.now()
     };
 
     rooms.forEach((room, roomId) => {
-        messages.get(roomId)?.push(adminMessage);
+        if (room.kind === 'direct') return;
+        const message = { ...adminMessage, id: generateId(), room: roomId, userId: req.auth.id, senderRole: community.role(req.auth, room), mentions: [] };
+        community.publish(room, message);
     });
-
-    io.emit('message', adminMessage);
+    saveMessages();
     res.json({ success: true, message: '广播发送成功' });
-});
-app.post('/api/rooms', adminMiddleware, (req, res) => {
-    const error = roomCreationError(req.auth, req.body);
-    if (error) return res.status(400).json({ error });
-    const { roomId, roomName, isPublic = true } = req.body;
-    const room = createRoom(roomId, roomName, isPublic, req.auth.username);
-    res.json({ success: true, message: '房间已创建', room: roomInfo(room, req.auth) });
-});
-function managedRoom(req, res, next) {
-    const room = rooms.get(req.params.roomId);
-    if (!room) return res.status(404).json({ error: '房间不存在' });
-    if (!canManageRoom(req.auth, room)) return res.status(403).json({ error: '仅房间创建者或超级管理员可管理此房间' });
-    req.room = room;
-    next();
-}
-app.post('/api/rooms/:roomId/invitations', adminMiddleware, managedRoom, (req, res) => {
-    const room = req.room;
-    if (room.isPublic) return res.status(400).json({ error: '公开房间已自动加入所有用户' });
-    if (!userStore.users.some(u => u.username === req.body.username)) return res.status(404).json({ error: '该账号不存在，请先注册' });
-    if (!room.members.includes(req.body.username)) room.members.push(req.body.username);
-    saveRooms();
-    syncRoomSubscriptions();
-    for (const socket of io.sockets.sockets.values()) {
-        if (getUserByToken(socket.data.token)?.username === req.body.username) socket.emit('room_invited', { roomId: room.id, roomName: room.name });
-    }
-    res.json({ success: true, message: '邀请已发送，用户已获得房间访问权限' });
-});
-function removeRoomConnections(room, reason) {
-    for (const user of [...room.users]) {
-        const socket = io.sockets.sockets.get(user.socketId);
-        if (!socket) continue;
-        socket.leave(roomChannel(room.id));
-        if (user.currentRoom === room.id) {
-            socket.emit('kicked_from_room', { roomId: room.id, roomName: room.name, reason });
-            switchRoom(socket, user, rooms.get('default'));
-        }
-    }
-    room.users = [];
-}
-app.delete('/api/rooms/:roomId', adminMiddleware, managedRoom, (req, res) => {
-    if (req.room.id === 'default') return res.status(400).json({ error: '不能删除默认房间' });
-    const force = req.query.force === 'true';
-    if (req.room.users.length && !force) return res.status(400).json({ error: '房间中还有用户，无法删除', userCount: req.room.users.length });
-    const kickedUsers = req.room.users.length;
-    removeRoomConnections(req.room, '房间已被管理员删除');
-    rooms.delete(req.room.id);
-    messages.delete(req.room.id);
-    saveRooms();
-    broadcastRoomList();
-    res.json({ success: true, message: '房间已删除', force, kickedUsers });
-});
-app.post('/api/rooms/:roomId/kick-users', adminMiddleware, managedRoom, (req, res) => {
-    if (req.room.isPublic) return res.status(400).json({ error: '公开房间自动加入所有用户，不能移除成员' });
-    const kickedCount = req.room.users.length;
-    removeRoomConnections(req.room, '房间成员已被管理员移除');
-    req.room.members = [req.room.createdBy].filter(Boolean);
-    saveRooms();
-    syncRoomSubscriptions();
-    res.json({ success: true, message: '已移除受邀成员', kickedCount });
 });
 app.get('/api/rooms', authMiddleware, (req, res) => {
     if (req.query.manage === '1' && !isAdmin(req.auth)) return res.status(403).json({ error: '需要管理员权限' });
     res.json(visibleRooms(req.auth, req.query.manage === '1'));
 });
 
+const socialChanged = require('./social')({ app, authMiddleware, adminMiddleware, userStore, social, saveSocial,
+    rooms, messages, saveRooms, saveMessages, accountById, areFriends, canAccessRoom, canManageRoom,
+    roomInfo, syncRoomSubscriptions, io, users, roomChannel, config, notifyJiyu, community });
+function notifyJiyuRoom(room, senderId, message) {
+    if (!config.jiyuEnabled || !room) return;
+    const recipients = room.memberIds.filter(id => id !== senderId && community.eligible(accountById(id) || {}, room, message) && ![...users.values()].some(user =>
+        user.id === id && user.currentRoom === room.id && user.isViewing));
+    const ips = recipients.map(id => accountById(id)?.boundIp).filter(ip => isIPv4(ip));
+    if (!ips.length) return;
+    notifyJiyu(ips, config.jiyuPort, message, (error, result) => {
+        if (error) console.error('极域 UDP 发送失败:', result);
+    });
+}
+
 // Socket.IO处理 - 现在 io 已经初始化了
 io.on('connection', (socket) => {
     const clientIP = socket.handshake.address;
+    socket.on('client_state', data => {
+        const user = socketUser(socket);
+        if (user && data && typeof data.isViewing === 'boolean') user.isViewing = data.isViewing;
+    });
     console.log(`用户连接: ${socket.id} from ${clientIP}`);
 
-    socket.on('create_room', (data = {}) => {
-        const user = socketUser(socket);
-        const error = roomCreationError(user, data);
-        if (error) return socket.emit('error', error);
-        const room = createRoom(data.roomId, data.roomName, data.isPublic !== false, user.username);
-        socket.emit('room_created', { roomId: room.id, roomName: room.name });
-    });
-    // Keep legacy clients from bypassing the same management policy over WebSocket.
-    socket.on('delete_room', (data) => {
-        const { roomId } = data || {};
-        const user = socketUser(socket);
-        const room = rooms.get(roomId);
-        if (!canManageRoom(user, room)) return socket.emit('error', '需要房间管理权限');
-        if (room.id === 'default') return socket.emit('error', '不能删除默认房间');
-        if (room.users.length) return socket.emit('error', '请在管理面板中强制删除有用户的房间');
-        rooms.delete(room.id);
-        messages.delete(room.id);
-        saveRooms();
-        broadcastRoomList();
-        socket.emit('room_deleted', { roomId: room.id, roomName: room.name });
-    });
+    for (const event of ['create_room', 'delete_room']) socket.on(event, () => socket.emit('error', '旧房间接口已停用，请使用群组管理'));
     socket.on('join_room', (data) => {
         const { roomId } = data || {};
         const user = socketUser(socket);
@@ -935,9 +991,11 @@ io.on('connection', (socket) => {
         switchRoom(socket, user, room);
     });
     socket.on('join', (data) => {
-        const { token, roomId = 'default' } = data || {};
+        const { token = requestToken({ headers: socket.request.headers }), roomId = 'default' } = data || {};
         const auth = getUserByToken(token);
         if (!auth) return socket.emit('error', '登录已过期，请重新登录');
+        const ipError = accountIpError(auth, clientIP);
+        if (ipError) return socket.emit('error', ipError);
         const room = rooms.get(roomId);
         if (!canAccessRoom(auth, room)) return socket.emit('error', '房间不存在或未获邀请');
         clearTimeout(socket.data.expiryTimer);
@@ -946,117 +1004,31 @@ io.on('connection', (socket) => {
             socket.emit('error', '登录已过期，请重新登录');
             socket.disconnect(true);
         }, Math.max(0, userStore.tokens[token].expiresAt - Date.now()));
-        const user = { id: generateId(), username: auth.username, role: auth.role,
+        const user = { id: auth.id, isViewing: false, username: auth.username, role: auth.role,
             socketId: socket.id, joinTime: Date.now(), ip: clientIP.replace('::ffff:', ''),
             isMuted: mutedIPs.has(clientIP.replace('::ffff:', '')), currentRoom: roomId };
         users.set(socket.id, user);
         syncRoomSubscriptions();
         socket.emit('account_changed', auth);
         switchRoom(socket, user, room);
+        socialChanged();
         if (!cancelPendingLeave(user.username)) broadcastUserJoined(socket, roomId, user.username, 'join');
     });
 
-    socket.on('send_message', (data) => {
-        const { content, roomId = 'default' } = data || {};
-        const user = socketUser(socket);
-        
-        if (!user) {
-            socket.emit('error', '请先加入聊天室');
-            return;
-        }
-        
-        if (!canAccessRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
-        if (user.isMuted) {
-            socket.emit('error', '你已被禁言，无法发送消息');
-            return;
-        }
-        
-        if (typeof content !== 'string' || !content.trim() || content.length > 20000) return;
-        
-        // 处理 Markdown
-        const messageId = generateId();
-        const isMarkdown = true;
-        const processedContent = processMarkdown(content, messageId);
-        
-        const message = {
-            id: messageId,
-            type: 'text',
-            username: user.username,
-            content,
-            processedContent: processedContent,
-            isMarkdown: isMarkdown,
-            timestamp: Date.now(),
-            room: roomId,
-            userIP: user.ip
-        };
-        
-        const roomMessages = messages.get(roomId) || [];
-        roomMessages.push(message);
-        io.to(roomChannel(roomId)).emit('message', message);
-        
-        console.log(`消息 [${roomId}]: ${user.username} (IP: ${user.ip}): ${content}`);
-    });
-
-    // 文件消息：客户端上传成功后通知服务器广播
-    socket.on('send_file', (data) => {
-        const { storedName, roomId = 'default' } = data || {};
-        const user = socketUser(socket);
-
-        if (!user) {
-            socket.emit('error', '请先加入聊天室');
-            return;
-        }
-        if (!canAccessRoom(user, rooms.get(roomId))) return socket.emit('error', '无权访问该房间');
-        if (user.isMuted) {
-            socket.emit('error', '你已被禁言，无法发送文件');
-            return;
-        }
-        if (!storedName || !rooms.has(roomId)) {
-            socket.emit('error', '文件消息无效');
-            return;
-        }
-
-        const record = fileStore.files.find(f => f.storedName === storedName);
-        if (!record) {
-            socket.emit('error', '文件不存在或已过期');
-            return;
-        }
-        if (record.expired) {
-            socket.emit('error', '文件已过期');
-            return;
-        }
-        if (record.roomId !== roomId || record.uploader !== user.username) return socket.emit('error', '不能转发其他用户或其他房间的文件');
-
-        const message = {
-            id: generateId(),
-            type: 'file',
-            username: user.username,
-            name: record.name,
-            size: record.size,
-            mimeType: record.mimeType,
-            fileUrl: `/uploads/${encodeURIComponent(record.storedName)}`,
-            storedName: record.storedName,
-            isImage: String(record.mimeType || '').startsWith('image/'),
-            timestamp: Date.now(),
-            room: roomId,
-            userIP: user.ip
-        };
-
-        const roomMessages = messages.get(roomId) || [];
-        roomMessages.push(message);
-        io.to(roomChannel(roomId)).emit('message', message);
-        saveFiles();
-
-        console.log(`文件消息 [${roomId}]: ${record.name} by ${user.username}`);
+    for (const event of ['send_message', 'send_file']) socket.on(event, data => {
+        const account = socketUser(socket);
+        if (!account) return socket.emit('error', '请先加入聊天室（登录已过期，请重新登录）');
+        try { community.send(account, data || {}); }
+        catch (error) { socket.emit('error', error.message); }
     });
 
     socket.on('typing', (data) => {
         const { isTyping, roomId = 'default' } = data || {};
         const user = socketUser(socket);
         
-        if (user && !user.isMuted && canAccessRoom(user, rooms.get(roomId))) {
+        if (user && !user.isMuted && canSendRoom(user, rooms.get(roomId))) {
             socket.to(roomChannel(roomId)).emit('user_typing', {
-                username: user.username,
+                username: user.username, userId: user.id,
                 isTyping, room: roomId
             });
         }
@@ -1082,6 +1054,7 @@ io.on('connection', (socket) => {
 
             users.delete(socket.id);
             broadcastRoomList();
+            socialChanged();
 
             // 若该账号已无其他在线连接，则延迟广播离开（可被刷新重连取消）
             const stillOnline = Array.from(users.values()).some(u => u.username === user.username);
@@ -1110,7 +1083,7 @@ function openBrowser(url) {
 
 server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
-    console.log('🚀 BetterLanTalk 内网聊天室服务器已启动 v1.1.1');
+    console.log('🚀 BetterLanTalk 内网聊天室服务器已启动 v' + require('./package.json').version);
     console.log(`📍 本地访问: http://localhost:${PORT}`);
     console.log(`🌐 内网访问: http://${localIP}:${PORT}`);
     console.log(`💬 聊天室: http://${localIP}:${PORT}/`);
@@ -1118,8 +1091,8 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log('================================');
     console.log('按 Ctrl+C 停止服务器');
 
-    // 由一键启动脚本设置该变量时，用本机内网地址自动打开浏览器
-    if (process.env.LANTALK_OPEN_BROWSER === '1') {
+    // Portable executables open the browser by default; scripts can opt in as before.
+    if (process.env.LANTALK_OPEN_BROWSER === '1' || (process.pkg && process.env.LANTALK_OPEN_BROWSER !== '0' && process.env.LANTALK_NO_BROWSER !== '1')) {
         const url = `http://${localIP}:${PORT}/`;
         console.log(`🖥️  正在打开浏览器: ${url}`);
         openBrowser(url);

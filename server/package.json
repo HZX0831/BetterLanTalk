@@ -1,23 +1,49 @@
 {
   "name": "better-lantalk",
-  "version": "1.1.1",
+  "version": "1.3.0",
   "description": "内网聊天室：在 LanTalk 基础上增强的二次开发版",
   "main": "server.js",
+  "bin": "server.js",
   "scripts": {
     "start": "node server.js",
-    "bundle": "pkg server.js --target node18-win-x64 --output chat-server.exe",
-    "test": "node --test test/*.test.cjs"
+    "bundle:linux": "pkg . --target node22-linux-x64 --no-bytecode --public-packages \"*\" --public --output ../dist/BetterLanTalk-linux-x64",
+    "test": "node --test test/*.test.cjs",
+    "test:browser": "node test/browser.cjs",
+    "test:bundle": "node test/packaged.cjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dompurify": "^3.0.5",
     "express": "^4.18.2",
+    "jpeg-js": "^0.4.4",
     "jsdom": "^22.1.0",
     "katex": "0.18.4",
+    "pngjs": "^7.0.0",
     "prismjs": "1.30.0",
     "socket.io": "^4.7.2"
   },
+  "pkg": {
+    "scripts": [
+      "*.js",
+      "../client/markdown.js",
+      "../client/vendor/luogu-markdown-editor/luogu-parser.js",
+      "node_modules/prismjs/components/prism-{c,cpp,python,bash,json,java,rust,go,pascal,latex}.js"
+    ],
+    "assets": [
+      "../LICENSE",
+      "../client/**/*",
+      "node_modules/**/{LICENSE*,LICENCE*,COPYING*,NOTICE*}",
+      "node_modules/katex/dist/**/*",
+      "node_modules/prismjs/themes/*.css",
+      "node_modules/prismjs/prism.js",
+      "node_modules/prismjs/components/*.min.js",
+      "node_modules/dompurify/dist/purify.min.js",
+      "node_modules/jsdom/lib/jsdom/browser/default-stylesheet.css",
+      "node_modules/jsdom/lib/jsdom/living/xhr/xhr-sync-worker.js",
+      "node_modules/socket.io/client-dist/**/*"
+    ]
+  },
   "devDependencies": {
-    "pkg": "^5.8.1"
+    "@yao-pkg/pkg": "6.23.0"
   }
 }

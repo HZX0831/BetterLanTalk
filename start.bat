@@ -23,7 +23,7 @@ echo [信息] Node.js 版本: %NODEVER%
 REM ---- 首次运行自动安装依赖 ----
 if not exist "node_modules" (
     echo [信息] 首次运行，正在安装依赖，请稍候...
-    call npm install --no-audit --no-fund
+    call npm ci --no-audit --no-fund
     if errorlevel 1 (
         echo [错误] 依赖安装失败，请检查网络后重试
         echo.

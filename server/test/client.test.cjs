@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const createNotifications = require('../../client/notifications');
-const html = fs.readFileSync(path.join(__dirname, '../../client/index.html'), 'utf8');
+const html = fs.readFileSync(path.join(__dirname, '../../client/chat.html'), 'utf8');
 
 function browser(t, { secure = true, permission = 'granted', unsupported = false, requestError = false, constructorError = false } = {}) {
   const dom = new JSDOM(html, { url: secure ? 'https://chat.example/' : 'http://192.168.1.2:3001/', runScripts: 'outside-only' });
@@ -16,6 +16,7 @@ function browser(t, { secure = true, permission = 'granted', unsupported = false
   window.document.hasFocus = () => state.focused;
   window.focus = () => { state.focused = true; };
   window.console.log = () => {};
+  window.matchMedia = () => ({ matches: false });
   if (!unsupported) {
     window.Notification = class {
       static permission = permission;
@@ -144,7 +145,7 @@ test('several tabs for one account suppress duplicate system notifications', asy
 
 function chatApp(t) {
   const fixture = browser(t);
-  const code = html.slice(html.indexOf('        const MessageType ='), html.indexOf('        // Markdown 帮助功能'));
+  const code = fs.readFileSync(path.join(__dirname, '../../client/chat.js'), 'utf8').split("document.addEventListener('DOMContentLoaded', async () => {")[0];
   fixture.window.eval(code.replace('class ChatApp', 'window.ChatApp = class ChatApp') + ';');
   const app = new fixture.window.ChatApp();
   const sent = [], listeners = new Map();
@@ -175,6 +176,58 @@ test('editor reserves Enter for newlines and Ctrl/Command+Enter for sending, inc
   window.clearTimeout(app.typingTimeout);
 });
 
+test('swapped sending inserts Ctrl/Command+Enter newlines and protects composition and completion', t => {
+  const { window, app, input, sent } = chatApp(t);
+  app.appearance = { sendMode: 'enter' };
+  const key = extra => {
+    const event = new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...extra });
+    input.dispatchEvent(event); return event;
+  };
+  let edits = 0; input.addEventListener('input', () => edits++);
+  input.value = 'abcd'; input.setSelectionRange(1, 3);
+  assert.equal(key({ ctrlKey: true }).defaultPrevented, true); assert.equal(input.value, 'a\nd');
+  assert.equal(key({ metaKey: true }).defaultPrevented, true); assert.equal(input.value, 'a\n\nd'); assert.equal(edits, 2);
+  assert.equal(key({ shiftKey: true }).defaultPrevented, false);
+  assert.equal(key({ altKey: true }).defaultPrevented, false);
+  assert.equal(key({ isComposing: true }).defaultPrevented, false);
+  assert.equal(key({ keyCode: 229 }).defaultPrevented, false);
+  input.dispatchEvent(new window.CompositionEvent('compositionstart'));
+  assert.equal(key({}).defaultPrevented, false);
+  input.dispatchEvent(new window.CompositionEvent('compositionend'));
+  input.addEventListener('keydown', event => event.preventDefault(), { capture: true, once: true }); key({});
+  assert.equal(sent.filter(packet => packet.event === 'send_message').length, 0);
+  input.maxLength = 3; input.value = 'abc'; input.setSelectionRange(3, 3); key({ ctrlKey: true }); assert.equal(input.value, 'abc');
+  input.maxLength = 20000; input.value = 'swapped message';
+  assert.equal(key({}).defaultPrevented, true); assert.equal(sent.find(packet => packet.event === 'send_message').data.content, 'swapped message');
+  window.clearTimeout(app.typingTimeout);
+});
+
+test('internal image and link drags cannot resend files; external drops and clipboard uploads still work', t => {
+  const { window, app, input } = chatApp(t);
+  const uploaded = []; app.uploadFile = file => uploaded.push(file);
+  const zone = window.document.querySelector('.messages-container');
+  const file = new window.File(['image'], 'image.png', { type: 'image/png' });
+  function drag(type, target, files = []) {
+    const event = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'dataTransfer', { value: { files, dropEffect: 'copy' } });
+    target.dispatchEvent(event); return event;
+  }
+  for (const target of [window.document.getElementById('messages-container'), window.document.getElementById('message-preview')]) {
+    const image = window.document.createElement('img'); target.append(image);
+    assert.equal(drag('dragstart', image).defaultPrevented, true);
+  }
+  const link = window.document.createElement('a'); link.href = '/uploads/image.png'; zone.append(link);
+  drag('dragstart', link);
+  const over = drag('dragover', zone); assert.equal(over.dataTransfer.dropEffect, 'none');
+  drag('drop', zone, [file]); assert.equal(uploaded.length, 0);
+  drag('drop', zone, [file]); assert.deepEqual(uploaded, [file]);
+  drag('dragstart', link); drag('dragend', link);
+  drag('drop', zone, [file]); assert.equal(uploaded.length, 2);
+  const paste = new window.Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, 'clipboardData', { value: { files: [file] } });
+  input.dispatchEvent(paste); assert.equal(paste.defaultPrevented, true); assert.equal(uploaded.length, 3);
+});
+
 test('messages in another room reach notification handling without entering the active chat', async t => {
   const { window, app, listeners } = chatApp(t);
   const displayed = []; app.displayMessage = msg => displayed.push(msg);
@@ -187,4 +240,18 @@ test('messages in another room reach notification handling without entering the 
   assert.match(window.document.title, /^\(1\)/);
   listeners.get('message')(message('same-room'));
   assert.equal(displayed.length, 1);
+});
+
+test('group notification tiers suppress popups but preserve gray-unread inputs and mention state', async t => {
+  const { window, state, notifications } = browser(t);
+  let mode = 'none'; notifications.currentUserId = () => 'me-id'; notifications.roomSettings = () => ({ notificationMode: mode });
+  await notifications.toggle();
+  notifications.receive(message('muted-mention', 'default', { userId: 'other', mentions: [{ type: 'all' }], senderRole: 'admin' }));
+  assert.equal(state.notices.length, 0); assert.equal(notifications.unread.get('default'), 1); assert.ok(notifications.mentions.has('default')); assert.doesNotMatch(window.document.title, /^\(/);
+  mode = 'important';
+  notifications.receive(message('ordinary', 'other', { userId: 'other', senderRole: 'member', mentions: [{ type: 'user', userId: 'somebody-else' }] }));
+  assert.equal(state.notices.length, 0); assert.ok(!notifications.importantUnread.has('other'));
+  notifications.receive(message('owner', 'other', { userId: 'other', senderRole: 'owner' })); assert.equal(state.notices.length, 1);
+  notifications.receive(message('to-me', 'other', { userId: 'other', mentions: [{ type: 'user', userId: 'me-id' }] })); assert.equal(state.notices.length, 2);
+  mode = 'all'; notifications.receive(message('all-mode', 'other', { userId: 'other', senderRole: 'member' })); assert.equal(state.notices.length, 3);
 });

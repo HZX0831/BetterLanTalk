@@ -1,0 +1,49 @@
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>BetterLanTalk 内网聊天室</title>
+<link rel="stylesheet" href="/client/styles.css"><link rel="stylesheet" href="/client/community.css">
+<link rel="stylesheet" href="/assets/katex/katex.min.css">
+<link rel="stylesheet" href="/assets/prism/themes/prism.css">
+<script defer src="/assets/katex/katex.min.js"></script>
+<script defer src="/assets/prism/prism.js"></script>
+<script defer src="/assets/prism/components/prism-c.min.js"></script>
+<script defer src="/assets/prism/components/prism-cpp.min.js"></script>
+<script defer src="/assets/prism/components/prism-python.min.js"></script>
+<script defer src="/assets/prism/components/prism-bash.min.js"></script>
+<script defer src="/assets/prism/components/prism-json.min.js"></script>
+<script defer src="/assets/prism/components/prism-java.min.js"></script>
+<script defer src="/assets/prism/components/prism-rust.min.js"></script>
+<script defer src="/assets/prism/components/prism-go.min.js"></script>
+<script defer src="/assets/prism/components/prism-pascal.min.js"></script>
+<script defer src="/assets/prism/components/prism-latex.min.js"></script>
+<script defer src="/assets/purify.js"></script>
+<script defer src="/client/vendor/luogu-markdown-editor/luogu-parser.js"></script>
+<script defer src="/client/markdown.js"></script>
+<script defer src="/client/message-policy.js"></script><script defer src="/client/emoji-data.js"></script><script defer src="/client/icons.js"></script><script defer src="/client/notifications.js"></script>
+<script defer src="/client/composer.js"></script>
+<script defer src="/socket.io/socket.io.js"></script>
+<script defer src="/client/chat.js"></script><script defer src="/client/community-ui.js"></script>
+<script defer src="/client/context-menu.js"></script></head><body data-view="chats"><div id="chat-screen" class="chat-container">
+<nav class="nav-rail" aria-label="主导航">
+<button id="profile-btn" class="self-avatar" aria-label="个人资料" title="个人资料"></button>
+<button id="nav-chats" data-icon="chat" data-label="聊天" class="selected"></button>
+<button id="nav-contacts" data-icon="people" data-label="联系人"><span id="contacts-request-count" class="request-badge hidden" aria-hidden="true"></span></button>
+<div class="rail-spacer"></div><button id="toolbox-btn" data-icon="menu" data-label="工具箱" aria-expanded="false"></button>
+<div id="toolbox" class="toolbox hidden"><span id="app-version"></span><a id="admin-view-btn" class="hidden" href="/admin">管理</a><button id="theme-btn">主题</button><button id="notify-btn">通知</button><button id="device-btn">通知设备</button><button id="logout-btn">退出</button></div>
+</nav>
+<aside id="conversation-sidebar" class="sidebar"><button id="sidebar-close" class="drawer-close" data-icon="close" data-label="收起列表"></button>
+<div class="sidebar-top"><strong>BetterLanTalk</strong><span id="self-name"></span></div>
+<div class="sidebar-search"><input id="conversation-search" placeholder="搜索" aria-label="搜索会话或联系人"><button id="create-group-btn" data-icon="plus" data-label="创建群组"></button><button id="discover-btn" data-icon="search" data-label="查找公开群"></button></div>
+<div id="discover-panel" class="hidden"></div><div id="contact-tabs" class="contact-tabs hidden"><button data-tab="friends">好友</button><button data-tab="groups">群组</button></div>
+<div id="contact-request-entries" class="contact-request-entries hidden"><button id="new-friends-btn"><span>新朋友</span><span id="friend-request-count" class="request-badge hidden"></span></button><button id="group-invitations-btn"><span>群邀请</span><span id="invitation-count" class="request-badge hidden"></span></button></div><div class="room-list" id="room-list"></div></aside>
+<div id="panel-backdrop" class="panel-backdrop hidden"></div><main class="main-content">
+<header class="chat-header"><div class="header-title"><button id="sidebar-toggle" class="panel-toggle" data-icon="chat" data-label="会话列表" aria-controls="conversation-sidebar" aria-expanded="false"></button><h2 id="current-room">默认聊天室 <span id="connection-status" class="connection-status status-disconnected">未连接</span></h2></div>
+<div class="header-actions"><button id="essence-btn" data-icon="star" data-label="群精华"></button><button id="history-search-btn" data-icon="search" data-label="搜索记录"></button><button id="files-btn" data-icon="folder" data-label="聊天文件"></button><button id="invite-btn" data-icon="invite" data-label="邀请好友"></button><button id="review-btn" data-icon="requests" data-label="入群审核"></button><button id="group-settings-btn" data-icon="settings" data-label="会话设置"></button><button id="details-toggle" class="panel-toggle" data-icon="people" data-label="公告与成员" aria-controls="chat-details" aria-expanded="false"></button></div></header>
+<div id="toast-container" class="toast-container"></div><div id="chat-view"><div class="chat-center">
+<div class="history-actions"><button id="older-messages" data-icon="history" data-label="加载更早消息"></button></div><div class="messages-container" id="messages-container"></div><div class="typing-indicator" id="typing-indicator"></div><div id="upload-preview" class="upload-preview hidden"></div>
+<div class="composer"><div id="composer-resize" class="composer-resize" role="separator" aria-orientation="horizontal" aria-controls="composer-panes" aria-label="调节编辑区高度" tabindex="0" title="拖动调节高度；方向键调节，双击恢复"><span></span></div>
+<div id="markdown-toolbar" class="markdown-toolbar" role="toolbar" aria-label="消息工具"><button id="emoji-btn" data-icon="smile" data-label="表情" disabled></button><button id="attach-btn" data-icon="attach" data-label="上传文件或图片" disabled></button><button id="preview-toggle" data-icon="preview" data-label="切换预览" aria-pressed="true"></button></div>
+<div id="reply-strip" class="reply-strip hidden"></div><div id="input-suggestions" class="input-suggestions hidden" role="listbox" aria-label="输入候选"></div>
+<div id="composer-panes" class="composer-panes"><section class="source-pane" aria-label="编辑"><div class="source-editor"><div id="line-numbers" class="line-numbers" aria-hidden="true"><div>1</div></div><textarea id="message-input" class="message-input" aria-label="消息 Markdown 源代码" placeholder="输入消息…" wrap="soft" spellcheck="false" maxlength="20000" disabled></textarea></div></section><section class="preview-pane" aria-label="预览"><div id="message-preview" class="markdown-content message-preview" aria-label="消息实时预览"></div></section></div>
+<div class="composer-footer"><input type="file" id="file-input" class="hidden" multiple><button id="send-mode-toggle" data-icon="keyboard" data-label="Ctrl+Enter 发送，Enter 换行；点击交换" aria-pressed="false"></button><button id="send-button" data-icon="send" data-label="发送（Ctrl+Enter）" class="send-button" disabled></button></div></div>
+</div><aside id="chat-details" class="chat-details"><button id="details-close" class="drawer-close" data-icon="close" data-label="收起成员栏"></button><section id="announcement-section"><h3>群公告</h3><div id="group-announcement"></div></section><h3>成员 <span id="online-count"></span></h3><div class="user-list" id="user-list"></div><div id="conversation-actions"></div><div id="file-panel" class="file-panel hidden"><button id="file-panel-toggle">文件</button><div id="file-list"></div></div></aside></div>
+<section id="contacts-view" class="contacts-view"><div class="friend-search"><form id="people-search-form"><input id="people-search" placeholder="查找用户" aria-label="查找用户"><button data-icon="search" data-label="查找"></button></form><div id="people-results"></div></div><section id="contact-requests" class="contact-requests hidden" aria-live="polite"></section><div id="contact-profile" class="contact-profile"><p>选择联系人</p></div></section>
+</main></div><dialog id="app-dialog"><header><h3 id="dialog-title"></h3><button id="dialog-close" data-icon="close" data-label="关闭"></button></header><div id="dialog-body"></div></dialog><div id="message-menu" class="message-menu hidden" role="menu"></div><div id="emoji-picker" class="emoji-picker hidden"></div></body></html>
